@@ -21,7 +21,7 @@ import { addMessageDecoration, MessageDecorationProps, removeMessageDecoration }
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
-const MY_USER_ID = "1500785121995788418";
+const MY_USER_ID = "287255751368638464";
 // veil v0.0.6
 
 const badge: ProfileBadge = {
