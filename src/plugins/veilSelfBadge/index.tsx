@@ -1,6 +1,8 @@
 /*
  * VeilSelfBadge - a tiny Vencord userplugin that shows a custom profile
  * badge ONLY on your own Discord account, visible ONLY to you (client-side).
+ *
+ * v0.0.1
  */
 
 import { addProfileBadge, BadgePosition, ProfileBadge, removeProfileBadge } from "@api/Badges";
