@@ -65,7 +65,7 @@ jobs:
               run: |
                   gh release view devbuild >/dev/null 2>&1 || gh release create devbuild --target main --title "DevBuild" --notes "Automated build"
                   gh release upload devbuild --clobber dist/*
-                  gh release edit devbuild --title "DevBuild $RELEASE_TAG"
+                  gh release edit devbuild --title "DevBuild $RELEASE_TAG" --prerelease=false --latest
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
                   RELEASE_TAG: ${{ env.release_tag }}
