@@ -44,6 +44,17 @@ jobs:
               run: |
                   rm -rf dist/*-unpacked dist/vendor Vencord.user.css vencordDesktopRenderer.css vencordDesktopRenderer.css.map
 
+            - name: Package desktop.asar
+              run: |
+                  mkdir -p dist/desktop-asar-staging
+                  cp dist/patcher.js dist/patcher.js.map dist/patcher.js.LEGAL.txt dist/desktop-asar-staging/
+                  cp dist/preload.js dist/preload.js.map dist/desktop-asar-staging/
+                  cp dist/renderer.js dist/renderer.js.map dist/renderer.js.LEGAL.txt dist/desktop-asar-staging/
+                  cp dist/renderer.css dist/renderer.css.map dist/desktop-asar-staging/
+                  echo '{"name":"vencord","main":"patcher.js"}' > dist/desktop-asar-staging/package.json
+                  npx --yes @electron/asar pack dist/desktop-asar-staging dist/desktop.asar
+                  rm -rf dist/desktop-asar-staging
+
             - name: Get some values needed for the release
               id: release_values
               run: |
@@ -52,7 +63,7 @@ jobs:
             - name: Upload DevBuild as release
               if: github.repository == 'Gabriele73/Veilcord'
               run: |
-                  gh release view devbuild >/dev/null 2>&1 || gh release create devbuild --prerelease --target main --title "DevBuild" --notes "Automated build"
+                  gh release view devbuild >/dev/null 2>&1 || gh release create devbuild --target main --title "DevBuild" --notes "Automated build"
                   gh release upload devbuild --clobber dist/*
                   gh release edit devbuild --title "DevBuild $RELEASE_TAG"
               env:
