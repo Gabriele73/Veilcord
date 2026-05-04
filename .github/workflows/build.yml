@@ -62,21 +62,30 @@ jobs:
 
             - name: Upload DevBuild as release
               if: github.repository == 'Gabriele73/Veilcord'
-              uses: softprops/action-gh-release@v2
-              with:
-                  tag_name: devbuild
-                  name: "DevBuild ${{ env.release_tag }}"
-                  body: "Automated build of latest main"
-                  prerelease: false
-                  make_latest: "true"
-                  target_commitish: main
-                  files: |
-                      dist/patcher.js
-                      dist/preload.js
-                      dist/renderer.js
-                      dist/renderer.css
+              run: |
+                  gh release view devbuild >/dev/null 2>&1 || gh release create devbuild --target main --title "DevBuild" --notes "Automated build"
+
+                  upload_with_retry() {
+                      local file="$1"
+                      for i in 1 2 3 4 5; do
+                          if gh release upload devbuild --clobber "$file"; then
+                              return 0
+                          fi
+                          echo "Upload of $file failed on attempt $i (GitHub asset API flake), retrying in $((i * 10))s..." >&2
+                          sleep $((i * 10))
+                      done
+                      echo "Upload of $file failed after 5 attempts" >&2
+                      return 1
+                  }
+
+                  for f in dist/patcher.js dist/preload.js dist/renderer.js dist/renderer.css; do
+                      upload_with_retry "$f"
+                  done
+
+                  gh release edit devbuild --title "DevBuild $RELEASE_TAG" --prerelease=false --latest
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  RELEASE_TAG: ${{ env.release_tag }}
 
             - name: Upload DevBuild to builds repo
               if: github.repository == 'Vendicated/Vencord'
