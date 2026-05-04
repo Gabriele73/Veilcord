@@ -21,7 +21,7 @@ import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
 const MY_USER_ID = "1500785121995788418";
-// veil v0.0.4
+// veil v0.0.5
 
 const badge: ProfileBadge = {
     id: "veil-self-badge",
