@@ -6,6 +6,7 @@
  */
 
 import { addProfileBadge, BadgePosition, ProfileBadge, removeProfileBadge } from "@api/Badges";
+import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
 const MY_USER_ID = "1500785121995788418";
@@ -22,7 +23,7 @@ const badge: ProfileBadge = {
 export default definePlugin({
     name: "VeilSelfBadge",
     description: "Adds a personal badge to my own Discord profile (client-side only).",
-    authors: [{ name: "gabriele", id: 0n }],
+    authors: [Devs.gabriele],
     required: true,
 
     start() {
