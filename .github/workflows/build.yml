@@ -62,23 +62,17 @@ jobs:
 
             - name: Upload DevBuild as release
               if: github.repository == 'Gabriele73/Veilcord'
-              run: |
-                  gh release view devbuild >/dev/null 2>&1 || gh release create devbuild --target main --title "DevBuild" --notes "Automated build"
-                  for i in 1 2 3 4 5; do
-                      if gh release upload devbuild --clobber dist/*; then
-                          break
-                      fi
-                      if [ "$i" -eq 5 ]; then
-                          echo "Upload failed after 5 attempts" >&2
-                          exit 1
-                      fi
-                      echo "Upload attempt $i failed (likely transient GH 5xx), retrying in 15s..." >&2
-                      sleep 15
-                  done
-                  gh release edit devbuild --title "DevBuild $RELEASE_TAG" --prerelease=false --latest
+              uses: softprops/action-gh-release@1e07f4398721186383de40550babbdf2b84acfc5 # v1
+              with:
+                  tag_name: devbuild
+                  name: "DevBuild ${{ env.release_tag }}"
+                  body: "Automated build of latest main"
+                  prerelease: false
+                  make_latest: "true"
+                  target_commitish: main
+                  files: dist/*
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-                  RELEASE_TAG: ${{ env.release_tag }}
 
             - name: Upload DevBuild to builds repo
               if: github.repository == 'Vendicated/Vencord'
