@@ -70,7 +70,11 @@ jobs:
                   prerelease: false
                   make_latest: "true"
                   target_commitish: main
-                  files: dist/*
+                  files: |
+                      dist/patcher.js
+                      dist/preload.js
+                      dist/renderer.js
+                      dist/renderer.css
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
