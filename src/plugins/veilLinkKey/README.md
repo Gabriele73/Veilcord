@@ -50,18 +50,34 @@ Tabs:
 
 ## Where the entry shows up
 
-`patches[0].find = "handleOpenSettingsContextMenu="` — the bottom-left user
-panel render module that owns the avatar / status / mute / deafen / cog row.
-The replacement uses a zero-width lookahead anchored on the cog's
-`onClick: …handleOpenSettingsContextMenu` prop, then injects
-`$self.renderPanelButton(),` immediately before the cog's JSX call. Because
-the panel buttons are siblings inside a `children:[…]` array, prepending one
-JSX expression with a trailing comma is array-balanced regardless of which
-position the cog occupies.
+Because Discord ships several different compiled shapes for the user panel
+(localized aria-labels, indirected `onClick` handlers, varying JSX runtime
+identifiers), regex-patching the cog button's call site turned out to be
+unreliable across Discord versions. This plugin instead injects via DOM with
+a `MutationObserver`:
 
-The button itself is wrapped in a Vencord `ErrorBoundary` (`noop`) so a future
-Discord refactor that breaks the patch can degrade silently rather than
-crashing the whole panel.
+1. `start()` queries `section[class*="panels__"]` (the bottom-left user panel
+   section). Class names are content-hashed by Discord but the `panels__`
+   prefix is stable.
+2. Inside, `[class*="buttons__"]` is the audio/cog row.
+3. The cog is the **last direct `<button>` child** of that row across both
+   voice-connected and idle states (the audio buttons are nested inside
+   `audioButtonParent__<hash>` wrappers, so a `:scope > button` query skips
+   them).
+4. We create a `<span data-veil-key-host="1">` host node, `insertBefore`
+   the cog, and `createRoot(host).render(<PanelButton/>)`.
+5. The `MutationObserver` watches `document.body` (`childList: true,
+   subtree: true`), throttled via `requestAnimationFrame`. Whenever Discord's
+   reconciler removes our host on a re-render, the observer fires and we
+   put it back — typically within a frame, so the user doesn't notice.
+
+`stop()` disconnects the observer, `unmount()`s the React root, and removes
+the host node.
+
+This is independent of the compiled JSX shape, so it survives Discord
+client updates that previously broke regex-based patches. The trade-off is
+the small per-mutation `requestAnimationFrame` callback — it's a single
+`querySelector` + a few DOM reads, well below any frame budget.
 
 ## Multi-key support — design notes (not yet implemented)
 
