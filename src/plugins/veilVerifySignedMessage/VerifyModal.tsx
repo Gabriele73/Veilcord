@@ -12,15 +12,16 @@ import { Divider } from "@components/Divider";
 import { Flex } from "@components/Flex";
 import { HeadingTertiary } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
-import { cryptoService } from "@plugins/veilCrypto";
+import { cryptoService, veilApiBase } from "@plugins/veilCrypto";
 import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
 import { useEffect, useState } from "@webpack/common";
 
-import { VeilSigPayload } from "./parser";
+import { VeilSigRef } from "./parser";
 
-type Status = "verifying" | "valid" | "invalid" | "error";
+type Status = "loading" | "verifying" | "valid" | "invalid" | "error";
 
 const STATUS_VARIANT: Record<Status, "info" | "success" | "danger"> = {
+    loading: "info",
     verifying: "info",
     valid: "success",
     invalid: "danger",
@@ -28,24 +29,58 @@ const STATUS_VARIANT: Record<Status, "info" | "success" | "danger"> = {
 };
 
 const STATUS_LABEL: Record<Status, string> = {
+    loading: "Fetching signed message from Veil…",
     verifying: "Verifying signature…",
     valid: "Signature is valid",
     invalid: "Signature does NOT match this public key",
     error: "Verification failed"
 };
 
+interface FetchedRecord {
+    id: string;
+    message: string;
+    publicKey: string;
+    signature: string;
+    v: number;
+    submitterPubkey: string;
+    createdAt: number;
+}
+
+const HEX64 = /^[0-9a-f]{64}$/;
+const HEX128 = /^[0-9a-f]{128}$/;
+const HEX16 = /^[0-9a-f]{16}$/;
+
+function normalizeRecord(raw: any): FetchedRecord | null {
+    if (!raw || typeof raw !== "object") return null;
+    const id = typeof raw.id === "string" ? raw.id.toLowerCase() : null;
+    const message = typeof raw.message === "string" ? raw.message : null;
+    const publicKey = typeof raw.publicKey === "string" ? raw.publicKey.toLowerCase() : null;
+    const signature = typeof raw.signature === "string" ? raw.signature.toLowerCase() : null;
+    const v = typeof raw.v === "number" ? raw.v : null;
+    const submitterPubkey = typeof raw.submitterPubkey === "string" ? raw.submitterPubkey.toLowerCase() : "";
+    const createdAt = typeof raw.createdAt === "number" ? raw.createdAt : 0;
+
+    if (!id || !HEX16.test(id)) return null;
+    if (!publicKey || !HEX64.test(publicKey)) return null;
+    if (!signature || !HEX128.test(signature)) return null;
+    if (message == null || v == null) return null;
+
+    return { id, message, publicKey, signature, v, submitterPubkey, createdAt };
+}
+
 export function VerifyModal({
     modalProps,
-    payload,
+    sigRef,
     authorTag,
     timestamp
 }: {
     modalProps: ModalProps;
-    payload: VeilSigPayload;
+    sigRef: VeilSigRef;
     authorTag?: string;
     timestamp?: string;
 }) {
-    const [status, setStatus] = useState<Status>("verifying");
+    const [status, setStatus] = useState<Status>("loading");
+    const [record, setRecord] = useState<FetchedRecord | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [copyHint, setCopyHint] = useState<string | null>(null);
 
@@ -53,9 +88,44 @@ export function VerifyModal({
         let cancelled = false;
         (async () => {
             try {
-                const ok = await cryptoService.verify(payload.message, payload.signature, payload.publicKey);
+                const res = await fetch(`${veilApiBase()}/veilcord/signed-message/${encodeURIComponent(sigRef.id)}`, {
+                    method: "GET",
+                    headers: { Accept: "application/json" }
+                });
                 if (cancelled) return;
-                setStatus(ok ? "valid" : "invalid");
+
+                if (res.status === 404) {
+                    setStatus("error");
+                    setErrorMsg("Signed message not found on the Veil backend (it may have been deleted).");
+                    return;
+                }
+                if (!res.ok) {
+                    setStatus("error");
+                    setErrorMsg(`Backend returned HTTP ${res.status}.`);
+                    return;
+                }
+
+                const raw = await res.json().catch(() => null);
+                if (cancelled) return;
+
+                const normalized = normalizeRecord(raw);
+                if (!normalized) {
+                    setStatus("error");
+                    setErrorMsg("Backend returned a malformed signed-message record.");
+                    return;
+                }
+                setRecord(normalized);
+                setStatus("verifying");
+
+                try {
+                    const ok = await cryptoService.verify(normalized.message, normalized.signature, normalized.publicKey);
+                    if (cancelled) return;
+                    setStatus(ok ? "valid" : "invalid");
+                } catch (e: any) {
+                    if (cancelled) return;
+                    setStatus("error");
+                    setErrorMsg(e?.message || String(e));
+                }
             } catch (e: any) {
                 if (cancelled) return;
                 setStatus("error");
@@ -63,7 +133,7 @@ export function VerifyModal({
             }
         })();
         return () => { cancelled = true; };
-    }, [payload.message, payload.signature, payload.publicKey]);
+    }, [sigRef.id]);
 
     const copy = (label: string, value: string) => {
         navigator.clipboard.writeText(value).then(() => {
@@ -80,6 +150,12 @@ export function VerifyModal({
             ? `${STATUS_LABEL.error}: ${errorMsg}`
             : STATUS_LABEL[status];
 
+    const recordedAt = record?.createdAt
+        ? (() => {
+            try { return new Date(record.createdAt).toLocaleString(); } catch { return String(record.createdAt); }
+        })()
+        : null;
+
     return (
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM}>
             <ModalHeader>
@@ -95,52 +171,53 @@ export function VerifyModal({
                         <Paragraph style={{ margin: 0, fontWeight: 600 }}>{statusText}</Paragraph>
                     </Card>
 
-                    <section>
-                        <HeadingTertiary>Message</HeadingTertiary>
-                        <Card defaultPadding>
-                            <Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                {payload.message}
-                            </Paragraph>
-                        </Card>
-                    </section>
-
-                    <Divider />
-
-                    <section>
-                        <HeadingTertiary>Public key</HeadingTertiary>
-                        <Flex alignItems="stretch" gap={8}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <CodeBlock content={payload.publicKey} lang="" />
-                            </div>
-                            <Button
-                                variant="secondary"
-                                size="small"
-                                onClick={() => copy("Public key", payload.publicKey)}
-                            >
-                                Copy
-                            </Button>
-                        </Flex>
-                    </section>
-
-                    <section>
-                        <HeadingTertiary>Signature</HeadingTertiary>
-                        <Flex alignItems="stretch" gap={8}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <CodeBlock content={payload.signature} lang="" />
-                            </div>
-                            <Button
-                                variant="secondary"
-                                size="small"
-                                onClick={() => copy("Signature", payload.signature)}
-                            >
-                                Copy
-                            </Button>
-                        </Flex>
-                    </section>
-
-                    {(authorTag || timestamp || payload.v != null) && (
+                    {record && (
                         <>
+                            <section>
+                                <HeadingTertiary>Message</HeadingTertiary>
+                                <Card defaultPadding>
+                                    <Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                        {record.message}
+                                    </Paragraph>
+                                </Card>
+                            </section>
+
                             <Divider />
+
+                            <section>
+                                <HeadingTertiary>Public key</HeadingTertiary>
+                                <Flex alignItems="stretch" gap={8}>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <CodeBlock content={record.publicKey} lang="" />
+                                    </div>
+                                    <Button
+                                        variant="secondary"
+                                        size="small"
+                                        onClick={() => copy("Public key", record.publicKey)}
+                                    >
+                                        Copy
+                                    </Button>
+                                </Flex>
+                            </section>
+
+                            <section>
+                                <HeadingTertiary>Signature</HeadingTertiary>
+                                <Flex alignItems="stretch" gap={8}>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <CodeBlock content={record.signature} lang="" />
+                                    </div>
+                                    <Button
+                                        variant="secondary"
+                                        size="small"
+                                        onClick={() => copy("Signature", record.signature)}
+                                    >
+                                        Copy
+                                    </Button>
+                                </Flex>
+                            </section>
+
+                            <Divider />
+
                             <section>
                                 <HeadingTertiary>Metadata</HeadingTertiary>
                                 <Flex flexDirection="column" gap={4}>
@@ -154,11 +231,26 @@ export function VerifyModal({
                                             <strong>Sent:</strong> {timestamp}
                                         </Paragraph>
                                     )}
-                                    {payload.v != null && (
+                                    {recordedAt && (
                                         <Paragraph style={{ margin: 0 }}>
-                                            <strong>Payload version:</strong> {String(payload.v)}
+                                            <strong>Recorded:</strong> {recordedAt}
                                         </Paragraph>
                                     )}
+                                    <Paragraph style={{ margin: 0 }}>
+                                        <strong>Signed-id:</strong>{" "}
+                                        <code>{record.id}</code>
+                                        <Button
+                                            variant="secondary"
+                                            size="small"
+                                            onClick={() => copy("Signed-id", record.id)}
+                                            style={{ marginLeft: 8 }}
+                                        >
+                                            Copy
+                                        </Button>
+                                    </Paragraph>
+                                    <Paragraph style={{ margin: 0 }}>
+                                        <strong>Payload version:</strong> {String(record.v)}
+                                    </Paragraph>
                                 </Flex>
                             </section>
                         </>

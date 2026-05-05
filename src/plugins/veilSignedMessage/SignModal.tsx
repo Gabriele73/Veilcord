@@ -10,7 +10,7 @@ import { Flex } from "@components/Flex";
 import { FormSwitch } from "@components/FormSwitch";
 import { HeadingSecondary } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
-import { cryptoService, VeilEd25519, VeilZwc } from "@plugins/veilCrypto";
+import { cryptoService, VeilEd25519, veilApiBase, VeilZwc } from "@plugins/veilCrypto";
 import { sendMessage } from "@utils/discord";
 import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
 import { TextArea, TextInput, useEffect, useState } from "@webpack/common";
@@ -18,6 +18,61 @@ import { TextArea, TextInput, useEffect, useState } from "@webpack/common";
 const HEX64 = /^[0-9a-fA-F]{64}$/;
 const DISCORD_MAX = 2000;
 const MAX_MESSAGE_LEN = DISCORD_MAX - VeilZwc.ZWC_OVERHEAD_CHARS;
+const SIGNED_MESSAGE_VERSION = VeilZwc.SIGNED_MESSAGE_VERSION;
+
+interface RegisterResponse {
+    id: string;
+    createdAt?: number;
+}
+
+async function registerSignedMessage({
+    message,
+    publicKey,
+    signature,
+    signRequest
+}: {
+    message: string;
+    publicKey: string;
+    signature: string;
+    signRequest: (canonicalBody: string) => Promise<string>;
+}): Promise<RegisterResponse> {
+    const body = {
+        message,
+        publicKey,
+        signature,
+        v: SIGNED_MESSAGE_VERSION,
+        nonce: typeof crypto?.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        timestamp: Math.floor(Date.now() / 1000)
+    };
+    const canonical = JSON.stringify(body);
+    const requestSignature = await signRequest(canonical);
+
+    const res = await fetch(`${veilApiBase()}/veilcord/signed-message`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-Public-Key": publicKey,
+            "X-Signature": requestSignature
+        },
+        body: canonical
+    });
+
+    let payload: any = null;
+    try {
+        payload = await res.json();
+    } catch { /* ignore */ }
+
+    if (!res.ok) {
+        const reason = (payload && typeof payload.error === "string") ? payload.error : `HTTP ${res.status}`;
+        throw new Error(`Backend rejected signed message: ${reason}`);
+    }
+    if (!payload || typeof payload.id !== "string" || !/^[0-9a-f]{16}$/.test(payload.id)) {
+        throw new Error("Backend returned an invalid id.");
+    }
+    return { id: payload.id, createdAt: typeof payload.createdAt === "number" ? payload.createdAt : undefined };
+}
 
 export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; channelId: string; }) {
     const [message, setMessage] = useState("");
@@ -54,17 +109,27 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
         try {
             let publicKey: string;
             let signature: string;
+            let signRequest: (canonicalBody: string) => Promise<string>;
 
             if (useStored) {
                 publicKey = await cryptoService.getPublicKey();
                 signature = await cryptoService.sign(message);
+                signRequest = body => cryptoService.sign(body);
             } else {
                 const pk = trimmedKey.toLowerCase();
                 publicKey = await VeilEd25519.getPublicKey(pk);
                 signature = await VeilEd25519.sign(pk, message);
+                signRequest = body => VeilEd25519.sign(pk, body);
             }
 
-            const content = message + VeilZwc.encodeSignature(publicKey, signature);
+            const { id } = await registerSignedMessage({
+                message,
+                publicKey,
+                signature,
+                signRequest
+            });
+
+            const content = message + VeilZwc.encodeId(id);
 
             await sendMessage(channelId, { content });
             modalProps.onClose();
@@ -85,7 +150,7 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
             <ModalContent>
                 <Flex flexDirection="column" gap={12}>
                     <Paragraph>
-                        Sign a message with an Ed25519 private key. Recipients can verify the signature matches the public key you include.
+                        Sign a message with an Ed25519 private key. Veil registers the signature with the backend and embeds a tiny lookup id; recipients running Veil verify the signature and see a "Signed" flair.
                     </Paragraph>
 
                     <section>
@@ -93,7 +158,7 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
                         <TextArea value={message} onChange={setMessage} placeholder="Message to sign..." />
                         {messageTooLong && (
                             <Paragraph style={{ color: "var(--status-danger)" }}>
-                                Message too long — max {MAX_MESSAGE_LEN} chars (signature payload reserves {VeilZwc.ZWC_OVERHEAD_CHARS}).
+                                Message too long — max {MAX_MESSAGE_LEN} chars (signed-id payload reserves {VeilZwc.ZWC_OVERHEAD_CHARS}).
                             </Paragraph>
                         )}
                     </section>

@@ -6,12 +6,12 @@
 
 import { openModal } from "@utils/modal";
 
-import { extractVeilSig } from "./parser";
+import { extractVeilSigRef } from "./parser";
 import { VerifyModal } from "./VerifyModal";
 
 export function VeilSigDecoration({ message }: { message: any; }) {
-    const payload = extractVeilSig(message?.content);
-    if (!payload) return null;
+    const ref = extractVeilSigRef(message?.content);
+    if (!ref) return null;
 
     const authorTag = message?.author
         ? message.author.global_name || message.author.username || message.author.id
@@ -37,7 +37,7 @@ export function VeilSigDecoration({ message }: { message: any; }) {
                 openModal(modalProps => (
                     <VerifyModal
                         modalProps={modalProps}
-                        payload={payload}
+                        sigRef={ref}
                         authorTag={authorTag}
                         timestamp={timestamp}
                     />

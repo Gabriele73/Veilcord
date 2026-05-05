@@ -7,11 +7,13 @@
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
+import { settings } from "./settings";
 import { cryptoService, CryptoService } from "./service";
 
 // veil v0.0.1
 
 export { cryptoService, CryptoService };
+export { veilApiBase } from "./settings";
 export * as VeilCryptoUtils from "./utils";
 export * as VeilEd25519 from "./ed25519";
 export * as VeilZwc from "./zwc";
@@ -22,6 +24,7 @@ export default definePlugin({
     authors: [Devs.gabriele],
     required: true,
 
+    settings,
     cryptoService,
 
     start() {

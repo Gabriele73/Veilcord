@@ -6,21 +6,17 @@
 
 import { VeilZwc } from "@plugins/veilCrypto";
 
-export interface VeilSigPayload {
-    message: string;
-    publicKey: string;
-    signature: string;
-    v?: number;
+export interface VeilSigRef {
+    id: string;
+    v: number;
 }
 
-export function extractVeilSig(content: unknown): VeilSigPayload | null {
+export function extractVeilSigRef(content: unknown): VeilSigRef | null {
     if (typeof content !== "string" || !content) return null;
-    const decoded = VeilZwc.decodeSignature(content);
+    const decoded = VeilZwc.decodeId(content);
     if (!decoded) return null;
     return {
-        message: decoded.message,
-        publicKey: decoded.publicKey.toLowerCase(),
-        signature: decoded.signature.toLowerCase(),
+        id: decoded.id.toLowerCase(),
         v: decoded.v
     };
 }
