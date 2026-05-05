@@ -25,20 +25,36 @@ export default definePlugin({
     description: "Adds a key button next to the bottom-left settings cog. Lets you paste a hex private key, import an encrypted veil-key-backup file, generate a new keypair, or export an encrypted backup.",
     authors: [Devs.gabriele],
     dependencies: ["VeilCrypto"],
-    required: false,
+    required: true,
 
     patches: [
         {
             // The bottom-left user panel render module — the one that owns the
             // settings cog (and its handleOpenSettingsContextMenu handler).
             find: "handleOpenSettingsContextMenu=",
-            replacement: {
-                // Inject our key panel button right before the settings cog JSX call.
-                // Anchor: a JSX call whose props block sets `onClick` to a
-                // `handleOpenSettingsContextMenu` reference (this/i/<bare>).
-                match: /(?=\(0,[^)]{1,40}\.jsxs?\)\([^,)]+,\{[^{}]{0,500}?onClick:[^,}]*?handleOpenSettingsContextMenu)/,
-                replace: "$self.renderPanelButton(),"
-            }
+            replacement: [
+                {
+                    // Most common shape: cog JSX call has `onClick: <stuff>handleOpenSettingsContextMenu<stuff>`
+                    // somewhere in its props. We splice our JSX expression in just before that JSX call,
+                    // which is array-balanced inside the surrounding children:[…].
+                    match: /(?=\(0,\i{1,3}\.jsx\w*\)\([^,)]{1,80},\{[\s\S]{0,800}?onClick:[\s\S]{0,200}?handleOpenSettingsContextMenu)/,
+                    replace: "$self.renderPanelButton(),",
+                    noWarn: true
+                },
+                {
+                    // Some Discord builds inline an arrow `()=>this.handleOpenSettingsContextMenu(...)` and
+                    // attach it to a non-`onClick` prop (e.g. `onMenuOpen`). Match any prop reference.
+                    match: /(?=\(0,\i{1,3}\.jsx\w*\)\([^,)]{1,80},\{[\s\S]{0,800}?\.handleOpenSettingsContextMenu)/,
+                    replace: "$self.renderPanelButton(),",
+                    noWarn: true
+                },
+                {
+                    // Fallback: anchor on the cog's aria-label intl key.
+                    match: /(?=\(0,\i{1,3}\.jsx\w*\)\([^,)]{1,80},\{[\s\S]{0,800}?#{intl::USER_SETTINGS_ACTIONS_MENU_LABEL})/,
+                    replace: "$self.renderPanelButton(),",
+                    noWarn: true
+                }
+            ]
         }
     ],
 

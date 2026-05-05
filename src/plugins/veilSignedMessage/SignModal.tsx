@@ -7,15 +7,14 @@
 import { BaseText } from "@components/BaseText";
 import { Button } from "@components/Button";
 import { Flex } from "@components/Flex";
-import { FormSwitch } from "@components/FormSwitch";
 import { HeadingSecondary } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
-import { cryptoService, VeilEd25519, veilApiBase, VeilZwc } from "@plugins/veilCrypto";
+import { cryptoService, veilApiBase, VeilZwc } from "@plugins/veilCrypto";
+import { LinkKeyModal } from "@plugins/veilLinkKey/LinkKeyModal";
 import { sendMessage } from "@utils/discord";
-import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
-import { TextArea, TextInput, useEffect, useState } from "@webpack/common";
+import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize, openModal } from "@utils/modal";
+import { TextArea, useEffect, useState } from "@webpack/common";
 
-const HEX64 = /^[0-9a-fA-F]{64}$/;
 const DISCORD_MAX = 2000;
 const MAX_MESSAGE_LEN = DISCORD_MAX - VeilZwc.ZWC_OVERHEAD_CHARS;
 const SIGNED_MESSAGE_VERSION = VeilZwc.SIGNED_MESSAGE_VERSION;
@@ -76,51 +75,46 @@ async function registerSignedMessage({
 
 export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; channelId: string; }) {
     const [message, setMessage] = useState("");
-    const [privateKey, setPrivateKey] = useState("");
-    const [useStored, setUseStored] = useState(false);
-    const [storedAvailable, setStoredAvailable] = useState(false);
+    const [keyReady, setKeyReady] = useState(false);
     const [storedPublicKey, setStoredPublicKey] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
 
-    useEffect(() => {
-        (async () => {
-            try {
-                if (await cryptoService.hasStoredKey()) {
-                    setStoredAvailable(true);
-                    setStoredPublicKey(await cryptoService.getPublicKey());
-                    setUseStored(true);
-                }
-            } catch {
-                // ignore — fall back to manual entry
+    async function refreshKey() {
+        try {
+            if (await cryptoService.hasStoredKey()) {
+                setStoredPublicKey(await cryptoService.getPublicKey());
+                setKeyReady(true);
+                return;
             }
-        })();
-    }, []);
+        } catch {
+            // fall through
+        }
+        setKeyReady(false);
+        setStoredPublicKey(null);
+    }
 
-    const trimmedKey = privateKey.trim();
-    const privateKeyValid = HEX64.test(trimmedKey);
+    useEffect(() => { void refreshKey(); }, []);
+
+    function openLinkKey() {
+        modalProps.onClose();
+        openModal(props => <LinkKeyModal modalProps={props} />);
+    }
+
     const messageReady = message.trim().length > 0;
     const messageTooLong = message.length > MAX_MESSAGE_LEN;
-    const canSign = !busy && messageReady && !messageTooLong && (useStored ? storedAvailable : privateKeyValid);
+    const canSign = !busy && keyReady && messageReady && !messageTooLong;
 
     async function handleSign() {
         setBusy(true);
         setError(null);
         try {
-            let publicKey: string;
-            let signature: string;
-            let signRequest: (canonicalBody: string) => Promise<string>;
-
-            if (useStored) {
-                publicKey = await cryptoService.getPublicKey();
-                signature = await cryptoService.sign(message);
-                signRequest = body => cryptoService.sign(body);
-            } else {
-                const pk = trimmedKey.toLowerCase();
-                publicKey = await VeilEd25519.getPublicKey(pk);
-                signature = await VeilEd25519.sign(pk, message);
-                signRequest = body => VeilEd25519.sign(pk, body);
+            if (!await cryptoService.hasStoredKey()) {
+                throw new Error("No private key is linked. Use the key button next to the settings cog to link or generate one.");
             }
+            const publicKey = await cryptoService.getPublicKey();
+            const signature = await cryptoService.sign(message);
+            const signRequest = (body: string) => cryptoService.sign(body);
 
             const { id } = await registerSignedMessage({
                 message,
@@ -150,8 +144,34 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
             <ModalContent>
                 <Flex flexDirection="column" gap={12}>
                     <Paragraph>
-                        Sign a message with an Ed25519 private key. Veil registers the signature with the backend and embeds a tiny lookup id; recipients running Veil verify the signature and see a "Signed" flair.
+                        Sign a message with your linked Ed25519 key. Veil registers the signature with the backend and embeds a tiny lookup id; recipients running Veil verify the signature and see a "Signed" flair.
                     </Paragraph>
+
+                    <section>
+                        <HeadingSecondary>Active key</HeadingSecondary>
+                        {keyReady && storedPublicKey ? (
+                            <code style={{
+                                display: "inline-block",
+                                padding: "4px 8px",
+                                background: "var(--background-secondary)",
+                                borderRadius: 4,
+                                fontSize: 12,
+                                wordBreak: "break-all"
+                            }}>
+                                {storedPublicKey}
+                            </code>
+                        ) : (
+                            <Flex flexDirection="column" gap={8}>
+                                <Paragraph style={{ color: "var(--status-danger)" }}>
+                                    No private key is linked to this client. All Veil signing goes through the shared
+                                    VeilCrypto vault — link one first.
+                                </Paragraph>
+                                <Flex gap={8}>
+                                    <Button variant="primary" onClick={openLinkKey}>Link a key…</Button>
+                                </Flex>
+                            </Flex>
+                        )}
+                    </section>
 
                     <section>
                         <HeadingSecondary>Message</HeadingSecondary>
@@ -162,33 +182,6 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
                             </Paragraph>
                         )}
                     </section>
-
-                    {storedAvailable && (
-                        <FormSwitch
-                            title="Use stored VeilCrypto key"
-                            description={storedPublicKey ? `Active public key: ${storedPublicKey.slice(0, 16)}…` : undefined}
-                            value={useStored}
-                            onChange={setUseStored}
-                            hideBorder
-                        />
-                    )}
-
-                    {!useStored && (
-                        <section>
-                            <HeadingSecondary>Private key (64-char hex)</HeadingSecondary>
-                            <TextInput
-                                type="password"
-                                value={privateKey}
-                                onChange={setPrivateKey}
-                                placeholder="ed25519 private key hex"
-                            />
-                            {privateKey && !privateKeyValid && (
-                                <Paragraph style={{ color: "var(--status-danger)" }}>
-                                    Invalid private key — must be exactly 64 hex characters.
-                                </Paragraph>
-                            )}
-                        </section>
-                    )}
 
                     {error && (
                         <Paragraph style={{ color: "var(--status-danger)" }}>{error}</Paragraph>
