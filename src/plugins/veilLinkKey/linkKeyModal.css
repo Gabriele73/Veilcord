@@ -1,0 +1,164 @@
+/*
+ * Veil — link/manage private key modal styles.
+ *
+ * Discord theme tokens are inconsistent across versions and themes —
+ * fall back to explicit colors so contrast never collapses to "text
+ * matches background". See CLAUDE.md "UI contrast" rule.
+ */
+
+.vc-veil-modal {
+    /* Modal-scoped color tokens with safe fallbacks. */
+    --veil-bg-card: var(--background-tertiary, #1e1f22);
+    --veil-bg-input: var(--input-background, #1e1f22);
+    --veil-text-strong: var(--header-primary, #f2f3f5);
+    --veil-text: var(--text-normal, #dbdee1);
+    --veil-text-muted: var(--text-muted, #949ba4);
+    --veil-border: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    --veil-warn-bg: rgba(250, 166, 26, 0.14);
+    --veil-warn-border: rgba(240, 179, 70, 0.4);
+    --veil-warn-text: #ffe4b3;
+    --veil-danger: var(--status-danger, #f23f43);
+    --veil-warning: var(--status-warning, #f0b346);
+
+    color: var(--veil-text);
+}
+
+.vc-veil-modal h1,
+.vc-veil-modal h2,
+.vc-veil-modal h3,
+.vc-veil-modal h4,
+.vc-veil-modal h5,
+.vc-veil-modal h6 {
+    color: var(--veil-text-strong);
+}
+
+.vc-veil-modal p,
+.vc-veil-modal span,
+.vc-veil-modal label {
+    color: var(--veil-text);
+}
+
+.vc-veil-pubkey-chip {
+    display: inline-block;
+    padding: 6px 10px;
+    background: var(--veil-bg-card);
+    color: var(--veil-text-strong);
+    border: 1px solid var(--veil-border);
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: var(--font-code, monospace);
+    word-break: break-all;
+    line-height: 1.4;
+}
+
+.vc-veil-strength-card {
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--veil-bg-card);
+    border: 1px solid var(--veil-border);
+    color: var(--veil-text);
+}
+
+.vc-veil-strength-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.vc-veil-strength-label {
+    color: var(--veil-text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.vc-veil-strength-value {
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.vc-veil-strength-track {
+    width: 100%;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+
+.vc-veil-strength-fill {
+    height: 100%;
+    transition: width 180ms ease, background 180ms ease;
+}
+
+.vc-veil-rules {
+    margin: 10px 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 12px;
+    font-size: 12px;
+}
+
+.vc-veil-rule {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--veil-text-muted);
+}
+
+.vc-veil-rule.pass {
+    color: #79d9ac;
+}
+
+.vc-veil-rule .vc-veil-rule-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.32);
+    flex-shrink: 0;
+}
+
+.vc-veil-rule.pass .vc-veil-rule-dot {
+    background: #57c78e;
+}
+
+.vc-veil-info-card {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--veil-warn-border);
+    background: var(--veil-warn-bg);
+    color: var(--veil-warn-text);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.vc-veil-info-card code {
+    background: rgba(0, 0, 0, 0.35);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #ffe4b3;
+    font-size: 12px;
+}
+
+.vc-veil-error {
+    color: var(--veil-danger) !important;
+}
+
+.vc-veil-warning {
+    color: var(--veil-warning) !important;
+}
+
+.vc-veil-muted {
+    color: var(--veil-text-muted) !important;
+    font-size: 12px;
+}
+
+.vc-veil-tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}

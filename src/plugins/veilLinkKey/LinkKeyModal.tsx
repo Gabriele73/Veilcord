@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import "./linkKeyModal.css";
+
 import { BaseText } from "@components/BaseText";
 import { Button } from "@components/Button";
 import { Flex } from "@components/Flex";
@@ -44,7 +46,7 @@ function ModeTabs({ mode, setMode, hasKey }: { mode: Mode; setMode: (m: Mode) =>
         ["export", "Export backup", hasKey]
     ];
     return (
-        <Flex gap={6} flexDirection="row" style={{ flexWrap: "wrap", marginBottom: 12 }}>
+        <div className="vc-veil-tabs">
             {tabs.filter(([, , show]) => show).map(([id, label]) => (
                 <Button
                     key={id}
@@ -55,20 +57,13 @@ function ModeTabs({ mode, setMode, hasKey }: { mode: Mode; setMode: (m: Mode) =>
                     {label}
                 </Button>
             ))}
-        </Flex>
+        </div>
     );
 }
 
 function PubkeyChip({ publicKey }: { publicKey: string; }) {
     return (
-        <code style={{
-            display: "inline-block",
-            padding: "4px 8px",
-            background: "var(--background-secondary)",
-            borderRadius: 4,
-            fontSize: 12,
-            wordBreak: "break-all"
-        }}>
+        <code className="vc-veil-pubkey-chip">
             {publicKey}
         </code>
     );
@@ -169,11 +164,11 @@ function PastePanel({ existing, refresh }: { existing: boolean; refresh: () => P
                 placeholder="ed25519 private key hex"
             />
             {hex && !valid && (
-                <Paragraph style={{ color: "var(--status-danger)" }}>
+                <Paragraph className="vc-veil-error">
                     Invalid private key — must be exactly 64 hex characters.
                 </Paragraph>
             )}
-            {error && <Paragraph style={{ color: "var(--status-danger)" }}>{error}</Paragraph>}
+            {error && <Paragraph className="vc-veil-error">{error}</Paragraph>}
             <Flex gap={8}>
                 <Button variant="primary" disabled={!valid || busy} onClick={attach}>
                     {busy ? "Linking…" : (existing ? "Replace key" : "Link key")}
@@ -265,7 +260,7 @@ function ImportPanel({ existing, refresh }: { existing: boolean; refresh: () => 
                 onChange={setPassword}
                 placeholder="Backup password"
             />
-            {error && <Paragraph style={{ color: "var(--status-danger)" }}>{error}</Paragraph>}
+            {error && <Paragraph className="vc-veil-error">{error}</Paragraph>}
             <Flex gap={8}>
                 <Button variant="primary" disabled={!payload || !password || busy} onClick={unlock}>
                     {busy ? "Unlocking…" : "Unlock & link"}
@@ -316,7 +311,7 @@ function GeneratePanel({ existing, refresh }: { existing: boolean; refresh: () =
                 {" "}
                 <strong>Save the private key to a safe place — losing it means losing access to anything signed with it.</strong>
             </Paragraph>
-            {error && <Paragraph style={{ color: "var(--status-danger)" }}>{error}</Paragraph>}
+            {error && <Paragraph className="vc-veil-error">{error}</Paragraph>}
             {revealed ? (
                 <Flex flexDirection="column" gap={8}>
                     <section>
@@ -336,7 +331,7 @@ function GeneratePanel({ existing, refresh }: { existing: boolean; refresh: () =
                         </Button>
                         <Button variant="primary" onClick={() => setRevealed(null)}>Done</Button>
                     </Flex>
-                    <BaseText size="sm" style={{ color: "var(--status-warning, #f0b346)" }}>
+                    <BaseText size="sm" className="vc-veil-warning">
                         This is the only time the private key is shown. Use the encrypted backup flow in veil-frontend
                         to make a recoverable copy.
                     </BaseText>
@@ -395,59 +390,31 @@ function StrengthMeter({ password }: { password: string; }) {
         ["symbol", "At least one symbol"]
     ];
     return (
-        <div style={{
-            padding: 12,
-            borderRadius: 8,
-            background: "var(--background-secondary, rgba(18, 19, 22, 0.44))",
-            border: "1px solid var(--background-modifier-accent, rgba(255,255,255,0.06))"
-        }}>
-            <Flex justifyContent="space-between" alignItems="center" style={{ marginBottom: 8 }}>
-                <BaseText size="sm" weight="semibold" style={{ color: "var(--text-muted)" }}>
-                    Password Strength
-                </BaseText>
-                <BaseText size="sm" weight="semibold" style={{ color: password ? tones[evalResult.tone] : "var(--text-muted)" }}>
+        <div className="vc-veil-strength-card">
+            <div className="vc-veil-strength-header">
+                <span className="vc-veil-strength-label">Password Strength</span>
+                <span
+                    className="vc-veil-strength-value"
+                    style={{ color: password ? tones[evalResult.tone] : "var(--veil-text-muted)" }}
+                >
                     {password ? evalResult.label : "Not set"}
-                </BaseText>
-            </Flex>
-            <div style={{
-                width: "100%",
-                height: 6,
-                borderRadius: 999,
-                background: "var(--background-modifier-accent, rgba(255,255,255,0.1))",
-                overflow: "hidden"
-            }}>
-                <div style={{
-                    height: "100%",
-                    width: `${widthPct}%`,
-                    background: tones[evalResult.tone],
-                    transition: "width 180ms ease, background 180ms ease"
-                }} />
+                </span>
             </div>
-            <ul style={{
-                margin: "10px 0 0",
-                padding: 0,
-                listStyle: "none",
-                display: "grid",
-                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                gap: "6px 12px",
-                fontSize: 12
-            }}>
+            <div className="vc-veil-strength-track">
+                <div
+                    className="vc-veil-strength-fill"
+                    style={{
+                        width: `${widthPct}%`,
+                        background: tones[evalResult.tone]
+                    }}
+                />
+            </div>
+            <ul className="vc-veil-rules">
                 {rules.map(([key, label]) => {
                     const pass = evalResult.checks[key];
                     return (
-                        <li key={key} style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 7,
-                            color: pass ? "#79d9ac" : "var(--text-muted)"
-                        }}>
-                            <span style={{
-                                width: 7,
-                                height: 7,
-                                borderRadius: "50%",
-                                background: pass ? "#57c78e" : "var(--background-modifier-accent, rgba(255,255,255,0.32))",
-                                flexShrink: 0
-                            }} />
+                        <li key={key} className={`vc-veil-rule${pass ? " pass" : ""}`}>
+                            <span className="vc-veil-rule-dot" />
                             {label}
                         </li>
                     );
@@ -518,15 +485,7 @@ function ExportPanel({ info }: { info: ActiveKeyInfo; }) {
 
     return (
         <Flex flexDirection="column" gap={12}>
-            <div style={{
-                padding: "10px 12px",
-                borderRadius: 8,
-                border: "1px solid rgba(240, 179, 70, 0.4)",
-                background: "rgba(250, 166, 26, 0.14)",
-                color: "#ffe4b3",
-                fontSize: 13,
-                lineHeight: 1.45
-            }}>
+            <div className="vc-veil-info-card">
                 This backup is encrypted locally with PBKDF2-SHA256 (600k iterations) + AES-GCM before download.
                 Same <code>veil-key-backup</code> v1 format the web frontend uses — it can be loaded back via the
                 Import backup tab here, or via the login page on veil.rip. Keep the password and file private.
@@ -553,17 +512,17 @@ function ExportPanel({ info }: { info: ActiveKeyInfo; }) {
                     placeholder="Retype password"
                 />
                 {confirm && !matches && (
-                    <Paragraph style={{ color: "var(--status-danger)" }}>
+                    <Paragraph className="vc-veil-error">
                         Passwords do not match.
                     </Paragraph>
                 )}
             </section>
 
-            <Paragraph style={{ color: "var(--text-muted)", fontSize: 12 }}>
+            <Paragraph className="vc-veil-muted">
                 Losing this password means losing access to anything signed with the key. There is no recovery.
             </Paragraph>
 
-            {error && <Paragraph style={{ color: "var(--status-danger)" }}>{error}</Paragraph>}
+            {error && <Paragraph className="vc-veil-error">{error}</Paragraph>}
 
             <Flex gap={8}>
                 <Button variant="primary" disabled={!ready} onClick={exportFile}>
@@ -576,14 +535,14 @@ function ExportPanel({ info }: { info: ActiveKeyInfo; }) {
 
 export function LinkKeyModal({ modalProps }: { modalProps: ModalProps; }) {
     const [info, setInfo] = useState<ActiveKeyInfo>({ hasKey: false, publicKey: null, uid: null });
-    const [mode, setMode] = useState<Mode>("status");
+    const [mode, setMode] = useState<Mode>("import");
 
     const refresh = async () => setInfo(await readActiveKey());
 
     useEffect(() => { void refresh(); }, []);
 
     return (
-        <ModalRoot {...modalProps} size={ModalSize.MEDIUM}>
+        <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className="vc-veil-modal">
             <ModalHeader>
                 <BaseText size="lg" weight="semibold" style={{ flexGrow: 1 }}>
                     Veil — Link Private Key

@@ -8,21 +8,30 @@
     margin: 0;
     border: none;
     background: transparent;
-    color: var(--interactive-normal);
+    /* Explicit gray that's visible on every Discord panel background.
+     * --interactive-normal is unreliable across themes/versions. */
+    color: var(--interactive-normal, #b5bac1);
     border-radius: 4px;
     cursor: pointer;
     flex-shrink: 0;
     transition: background-color 120ms ease-out, color 120ms ease-out;
 }
 
+.vc-veil-panel-button svg {
+    /* SVG strokes inherit currentColor; force-render against panel bg. */
+    color: inherit;
+    stroke: currentColor;
+    fill: none;
+}
+
 .vc-veil-panel-button:hover {
-    background: var(--background-modifier-selected);
-    color: var(--interactive-hover);
+    background: var(--background-modifier-selected, rgba(255, 255, 255, 0.08));
+    color: var(--interactive-hover, #dbdee1);
 }
 
 .vc-veil-panel-button:active {
-    background: var(--background-modifier-active);
-    color: var(--interactive-active);
+    background: var(--background-modifier-active, rgba(255, 255, 255, 0.12));
+    color: var(--interactive-active, #ffffff);
 }
 
 .vc-veil-panel-button:focus-visible {
