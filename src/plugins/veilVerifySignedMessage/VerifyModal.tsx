@@ -107,8 +107,11 @@ export function VerifyModal({
                     <Divider />
 
                     <section>
-                        <Flex justifyContent="space-between" alignItems="center" style={{ marginBottom: 6 }}>
-                            <HeadingTertiary style={{ margin: 0 }}>Public key</HeadingTertiary>
+                        <HeadingTertiary>Public key</HeadingTertiary>
+                        <Flex alignItems="stretch" gap={8}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <CodeBlock content={payload.publicKey} lang="" />
+                            </div>
                             <Button
                                 variant="secondary"
                                 size="small"
@@ -117,12 +120,14 @@ export function VerifyModal({
                                 Copy
                             </Button>
                         </Flex>
-                        <CodeBlock content={payload.publicKey} lang="" />
                     </section>
 
                     <section>
-                        <Flex justifyContent="space-between" alignItems="center" style={{ marginBottom: 6 }}>
-                            <HeadingTertiary style={{ margin: 0 }}>Signature</HeadingTertiary>
+                        <HeadingTertiary>Signature</HeadingTertiary>
+                        <Flex alignItems="stretch" gap={8}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <CodeBlock content={payload.signature} lang="" />
+                            </div>
                             <Button
                                 variant="secondary"
                                 size="small"
@@ -131,7 +136,6 @@ export function VerifyModal({
                                 Copy
                             </Button>
                         </Flex>
-                        <CodeBlock content={payload.signature} lang="" />
                     </section>
 
                     {(authorTag || timestamp || payload.v != null) && (
