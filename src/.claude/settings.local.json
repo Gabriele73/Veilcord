@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build *)",
+      "Bash(git add *)",
+      "Bash(git -c user.email='gabriele@veil.local' -c user.name='gabriele' commit -m 'Install Vencord as loose-file directory instead of asar archive')",
+      "Bash(git push *)"
+    ]
+  }
+}

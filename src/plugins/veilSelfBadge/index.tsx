@@ -84,7 +84,7 @@ const badges: ProfileBadge[] = ROLES.map(role => ({
     iconSrc: ROLE_META[role].iconSrc,
     position: BadgePosition.START,
     shouldShow: ({ userId }) => VEIL_TEAM[userId]?.includes(role) ?? false,
-    link: "https://github.com/"
+    link: "https://github.com/Gabriele73/Veilcord"
 }));
 
 const VEIL_FLAIR_ID = "veil-team-flair";
