@@ -27,6 +27,7 @@ type VeilRole = "dev" | "mod" | "staff";
 
 const VEIL_TEAM: Record<string, VeilRole> = {
     "287255751368638464": "dev",
+	"610961103962505237": "staff",
 };
 
 const ROLE_META: Record<VeilRole, { label: string; tooltip: string; gradient: string; iconSrc: string; }> = {
@@ -101,7 +102,7 @@ export default definePlugin({
 
     start() {
         for (const badge of badges) addProfileBadge(badge);
-        addMessageDecoration(VEIL_FLAIR_ID, VeilFlair);
+        // addMessageDecoration(VEIL_FLAIR_ID, VeilFlair);
     },
 
     stop() {
