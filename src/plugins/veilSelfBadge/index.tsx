@@ -21,33 +21,59 @@ import { addMessageDecoration, MessageDecorationProps, removeMessageDecoration }
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
+import AdminIcon from "file://./badges/Admin.svg?base64";
+import DeveloperIcon from "file://./badges/Developer.svg?base64";
+import ModeratorIcon from "file://./badges/Moderator.svg?base64";
+import StaffIcon from "file://./badges/Staff.svg?base64";
+import SystemIcon from "file://./badges/System.svg?base64";
+import TesterIcon from "file://./badges/Tester.svg?base64";
+
 // veil v0.0.7
 
-type VeilRole = "dev" | "mod" | "staff";
+type VeilRole = "developer" | "moderator" | "admin" | "staff" | "system" | "tester";
 
-const VEIL_TEAM: Record<string, VeilRole> = {
-    "287255751368638464": "dev",
-	"610961103962505237": "staff",
+const VEIL_TEAM: Record<string, VeilRole[]> = {
+    "287255751368638464": ["developer"],
+	"287255751368638464": ["staff"],
+    "610961103962505237": ["staff"],
 };
 
 const ROLE_META: Record<VeilRole, { label: string; tooltip: string; gradient: string; iconSrc: string; }> = {
-    dev: {
+    developer: {
         label: "Veil Developer",
         tooltip: "Veil Developer",
         gradient: "linear-gradient(135deg, #5865f2, #7289da)",
-        iconSrc: "https://cdn.discordapp.com/badge-icons/5e74e9b61934fc1f67c65515d1f7e60d.png"
+        iconSrc: DeveloperIcon
     },
-    mod: {
+    moderator: {
         label: "Veil Moderator",
         tooltip: "Veil Moderator",
         gradient: "linear-gradient(135deg, #2ecc71, #1f8b4c)",
-        iconSrc: "https://cdn.discordapp.com/badge-icons/5e74e9b61934fc1f67c65515d1f7e60d.png"
+        iconSrc: ModeratorIcon
+    },
+    admin: {
+        label: "Veil Admin",
+        tooltip: "Veil Admin",
+        gradient: "linear-gradient(135deg, #e74c3c, #992d22)",
+        iconSrc: AdminIcon
     },
     staff: {
         label: "Veil Staff",
         tooltip: "Veil Staff",
         gradient: "linear-gradient(135deg, #f1c40f, #c27c0e)",
-        iconSrc: "https://cdn.discordapp.com/badge-icons/5e74e9b61934fc1f67c65515d1f7e60d.png"
+        iconSrc: StaffIcon
+    },
+    system: {
+        label: "Veil System",
+        tooltip: "Veil System",
+        gradient: "linear-gradient(135deg, #95a5a6, #607d8b)",
+        iconSrc: SystemIcon
+    },
+    tester: {
+        label: "Veil Tester",
+        tooltip: "Veil Tester",
+        gradient: "linear-gradient(135deg, #9b59b6, #71368a)",
+        iconSrc: TesterIcon
     }
 };
 
@@ -58,16 +84,16 @@ const badges: ProfileBadge[] = ROLES.map(role => ({
     description: ROLE_META[role].tooltip,
     iconSrc: ROLE_META[role].iconSrc,
     position: BadgePosition.START,
-    shouldShow: ({ userId }) => VEIL_TEAM[userId] === role,
+    shouldShow: ({ userId }) => VEIL_TEAM[userId]?.includes(role) ?? false,
     link: "https://github.com/"
 }));
 
 const VEIL_FLAIR_ID = "veil-team-flair";
 
 const VeilFlair = ({ message }: MessageDecorationProps) => {
-    const role = message?.author?.id ? VEIL_TEAM[message.author.id] : undefined;
-    if (!role) return null;
-    const meta = ROLE_META[role];
+    const roles = message?.author?.id ? VEIL_TEAM[message.author.id] : undefined;
+    if (!roles?.length) return null;
+    const meta = ROLE_META[roles[0]];
     return (
         <span
             style={{
@@ -107,6 +133,6 @@ export default definePlugin({
 
     stop() {
         for (const badge of badges) removeProfileBadge(badge);
-        removeMessageDecoration(VEIL_FLAIR_ID);
+        // removeMessageDecoration(VEIL_FLAIR_ID);
     }
 });
