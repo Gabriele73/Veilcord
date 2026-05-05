@@ -63,6 +63,10 @@ export const CspPolicies: PolicyMap = {
     "dearrow-thumb.ajay.app": ImageSrc, // Dearrow Thumbnail CDN
     "usrbg.is-hardly.online": ImageSrc, // USRBG API
     "icons.duckduckgo.com": ImageSrc, // DuckDuckGo Favicon API (Reverse Image Search)
+
+    // Veil
+    "api.veil.rip": ConnectSrc, // Veil backend (VeilCrypto / VeilSignedMessage / VeilVerifySignedMessage)
+    "*.veil.rip": ConnectSrc, // Veil canary / staging API hosts
 };
 
 const findHeader = (headers: PolicyMap, headerName: Lowercase<string>) => {
