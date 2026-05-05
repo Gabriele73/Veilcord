@@ -162,3 +162,20 @@
     flex-wrap: wrap;
     margin-bottom: 12px;
 }
+
+/*
+ * Discord's modal sometimes paints siblings (animations, the strength
+ * meter card) on top of input rows on certain renderer builds, which
+ * makes the password fields silently un-clickable. Anchor a stacking
+ * context per row and force pointer events back on so clicks always
+ * reach the input.
+ */
+.vc-veil-input-row {
+    position: relative;
+    z-index: 1;
+}
+
+.vc-veil-input-row input,
+.vc-veil-input-row [role="textbox"] {
+    pointer-events: auto;
+}

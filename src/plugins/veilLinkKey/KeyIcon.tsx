@@ -19,7 +19,7 @@ export function KeyIcon({ width = 18, height = 18, color = "currentColor", class
             viewBox="0 0 24 24"
             fill="none"
             stroke={color}
-            strokeWidth="2"
+            strokeWidth="2.5"
             strokeLinecap="round"
             strokeLinejoin="round"
             aria-hidden="true"

@@ -99,11 +99,19 @@ export class CryptoService {
         }
         this._activePrivateKeyHex = normalized;
         this._hasStoredKey = true;
+        this._emitStateChange();
     }
 
     private async _clearActivePrivateKey() {
         this._activePrivateKeyHex = null;
         this._hasStoredKey = false;
+        this._emitStateChange();
+    }
+
+    private _emitStateChange() {
+        try {
+            globalThis.dispatchEvent?.(new CustomEvent("veilcrypto:state-change"));
+        } catch { /* ignore */ }
     }
 
     private async _encryptPrivateKeyForVault(privateKeyHex: string, vaultKeyBytes: Uint8Array) {
@@ -438,6 +446,13 @@ export class CryptoService {
     async hasStoredKey(): Promise<boolean> {
         await this._ensureInitialized();
         return this._hasStoredKey;
+    }
+
+    async hasAnyLinkedKey(): Promise<boolean> {
+        await this._ensureInitialized();
+        if (this._hasStoredKey) return true;
+        const vault = await this.keyStorage.getPrivateKeyVault();
+        return Boolean(vault);
     }
 
     async setPrivateKey(privateKeyHex: string): Promise<string> {

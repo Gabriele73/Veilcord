@@ -195,7 +195,7 @@ function StatusPanel({ info, refresh, onClose }: { info: ActiveKeyInfo; refresh:
             </section>
             <Paragraph>
                 Your private key lives in an encrypted local vault (AES-GCM) and stays unlocked through a 30-day
-                trusted-device lease. It's the same setup veil-frontend uses.
+                trusted-device lease.
             </Paragraph>
             <Flex gap={8} style={{ flexWrap: "wrap" }}>
                 <Button variant="secondary" disabled={busy} onClick={lock}>Lock vault</Button>
@@ -236,12 +236,17 @@ function PastePanel({ existing, refresh }: { existing: boolean; refresh: () => P
             <Paragraph>
                 Paste a 64-character hex Ed25519 private key. {existing && "This will replace the key that's currently linked."}
             </Paragraph>
-            <TextInput
-                type="password"
-                value={hex}
-                onChange={setHex}
-                placeholder="ed25519 private key hex"
-            />
+            <div className="vc-veil-input-row">
+                <TextInput
+                    type="password"
+                    value={hex}
+                    onChange={setHex}
+                    placeholder="ed25519 private key hex"
+                    autoComplete="off"
+                    spellCheck={false}
+                    autoCapitalize="off"
+                />
+            </div>
             {hex && !valid && (
                 <Paragraph className="vc-veil-error">
                     That doesn't look right. A private key must be exactly 64 hex characters.
@@ -313,7 +318,7 @@ function ImportPanel({ existing, refresh }: { existing: boolean; refresh: () => 
     return (
         <Flex flexDirection="column" gap={10}>
             <Paragraph>
-                Import an encrypted backup exported from veil-frontend (a <code>veil-key-backup</code> v1 JSON file).
+                Import an encrypted backup you've exported.
                 {existing && " The currently linked key will be replaced."}
             </Paragraph>
             <input
@@ -333,12 +338,17 @@ function ImportPanel({ existing, refresh }: { existing: boolean; refresh: () => 
                     </Button>
                 )}
             </Flex>
-            <TextInput
-                type="password"
-                value={password}
-                onChange={setPassword}
-                placeholder="Backup password"
-            />
+            <div className="vc-veil-input-row">
+                <TextInput
+                    type="password"
+                    value={password}
+                    onChange={setPassword}
+                    placeholder="Backup password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    autoCapitalize="off"
+                />
+            </div>
             {error && <Paragraph className="vc-veil-error">{error}</Paragraph>}
             <Flex gap={8}>
                 <Button variant="primary" disabled={!payload || !password || busy} onClick={unlock}>
@@ -566,30 +576,35 @@ function ExportPanel({ info }: { info: ActiveKeyInfo; }) {
         <Flex flexDirection="column" gap={12}>
             <div className="vc-veil-info-card">
                 The backup is encrypted locally with PBKDF2-SHA256 (600k iterations) and AES-GCM before it leaves your
-                device. It uses the same <code>veil-key-backup</code> v1 format as the web frontend, so you can load it
-                back from the Import backup tab here or from the login page on veil.rip. Keep both the password and the
+                client. Keep both the password and the backup
                 file private.
             </div>
 
-            <section>
+            <section className="vc-veil-input-row">
                 <HeadingSecondary>Encryption password</HeadingSecondary>
                 <TextInput
                     type="password"
                     value={password}
                     onChange={setPassword}
                     placeholder="Use a strong password"
+                    autoComplete="new-password"
+                    spellCheck={false}
+                    autoCapitalize="off"
                 />
             </section>
 
             <StrengthMeter password={password} />
 
-            <section>
+            <section className="vc-veil-input-row">
                 <HeadingSecondary>Confirm password</HeadingSecondary>
                 <TextInput
                     type="password"
                     value={confirm}
                     onChange={setConfirm}
                     placeholder="Retype password"
+                    autoComplete="new-password"
+                    spellCheck={false}
+                    autoCapitalize="off"
                 />
                 {confirm && !matches && (
                     <Paragraph className="vc-veil-error">
