@@ -89,3 +89,60 @@
     }
 }
 
+/*
+ * CSS-only tooltip. The Vencord `Tooltip` component is a `waitForComponent`
+ * lazy that caches its first resolved value forever; if this button mounts
+ * before Discord's tooltip module shows up in webpack (we mount early via
+ * a MutationObserver), the cached value is the no-op fallback and the
+ * tooltip never renders. A pure CSS tooltip sidesteps that entirely.
+ */
+.vc-veil-panel-tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    padding: 6px 9px;
+    border-radius: 5px;
+    background: var(--background-floating, #111214);
+    color: var(--text-normal, #dbdee1);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.3;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    transition: opacity 100ms ease-out, transform 100ms ease-out, visibility 0s linear 100ms;
+    z-index: 1000;
+}
+
+.vc-veil-panel-tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--background-floating, #111214);
+}
+
+.vc-veil-panel-button:hover .vc-veil-panel-tooltip,
+.vc-veil-panel-button:focus-visible .vc-veil-panel-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+    transition: opacity 100ms ease-out, transform 100ms ease-out, visibility 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vc-veil-panel-tooltip {
+        transition: opacity 80ms linear, visibility 0s linear 80ms;
+        transform: translateX(-50%);
+    }
+    .vc-veil-panel-button:hover .vc-veil-panel-tooltip,
+    .vc-veil-panel-button:focus-visible .vc-veil-panel-tooltip {
+        transform: translateX(-50%);
+    }
+}
+
