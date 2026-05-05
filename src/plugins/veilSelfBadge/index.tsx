@@ -21,20 +21,19 @@ import { addMessageDecoration, MessageDecorationProps, removeMessageDecoration }
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
-import AdminIcon from "file://./badges/Admin.svg?base64";
-import DeveloperIcon from "file://./badges/Developer.svg?base64";
-import ModeratorIcon from "file://./badges/Moderator.svg?base64";
-import StaffIcon from "file://./badges/Staff.svg?base64";
-import SystemIcon from "file://./badges/System.svg?base64";
-import TesterIcon from "file://./badges/Tester.svg?base64";
+import AdminIcon from "file://./badges/Admin.svg?base64&minify";
+import DeveloperIcon from "file://./badges/Developer.svg?base64&minify";
+import ModeratorIcon from "file://./badges/Moderator.svg?base64&minify";
+import StaffIcon from "file://./badges/Staff.svg?base64&minify";
+import SystemIcon from "file://./badges/System.svg?base64&minify";
+import TesterIcon from "file://./badges/Tester.svg?base64&minify";
 
 // veil v0.0.7
 
 type VeilRole = "developer" | "moderator" | "admin" | "staff" | "system" | "tester";
 
 const VEIL_TEAM: Record<string, VeilRole[]> = {
-    "287255751368638464": ["developer"],
-	"287255751368638464": ["staff"],
+    "287255751368638464": ["developer", "staff"],
     "610961103962505237": ["staff"],
 };
 
