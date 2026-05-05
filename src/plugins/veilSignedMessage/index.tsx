@@ -36,7 +36,8 @@ export default definePlugin({
     name: "VeilSignedMessage",
     description: "Adds a chatbar button to sign a message with an Ed25519 private key (or the stored VeilCrypto key) and send it in the current channel.",
     authors: [Devs.gabriele],
-    dependencies: ["VeilCrypto"],
+    dependencies: ["ChatInputButtonAPI", "VeilCrypto"],
+    required: true,
 
     start() {
         addChatBarButton(BUTTON_ID, VeilSignButton, SignIcon);
