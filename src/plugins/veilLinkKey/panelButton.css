@@ -1,0 +1,31 @@
+.vc-veil-panel-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+    color: var(--interactive-normal);
+    border-radius: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+
+.vc-veil-panel-button:hover {
+    background: var(--background-modifier-selected);
+    color: var(--interactive-hover);
+}
+
+.vc-veil-panel-button:active {
+    background: var(--background-modifier-active);
+    color: var(--interactive-active);
+}
+
+.vc-veil-panel-button:focus-visible {
+    outline: 2px solid var(--brand-experiment, #5865f2);
+    outline-offset: 1px;
+}
