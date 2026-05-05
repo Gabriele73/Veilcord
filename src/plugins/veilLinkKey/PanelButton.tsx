@@ -10,7 +10,7 @@ import { KeyIcon } from "./KeyIcon";
 
 export function PanelButton({ onClick }: { onClick: () => void; }) {
     return (
-        <Tooltip text="Veil — Manage Private Key">
+        <Tooltip text="Manage your Veil key">
             {tooltipProps => (
                 <button
                     {...tooltipProps}

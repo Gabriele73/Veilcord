@@ -19,31 +19,65 @@ const HEX64 = /^[0-9a-fA-F]{64}$/;
 
 type Mode = "status" | "paste" | "import" | "generate" | "export";
 
-type ActiveKeyInfo = { hasKey: boolean; publicKey: string | null; uid: string | null; };
+type ActiveKeyInfo = {
+    hasKey: boolean;
+    publicKey: string | null;
+    uid: string | null;
+    hasVault: boolean;
+    passkeyEnrolled: boolean;
+    passkeyLoginAvailable: boolean;
+    trustedLeaseActive: boolean;
+};
+
+const EMPTY_KEY_INFO: ActiveKeyInfo = {
+    hasKey: false,
+    publicKey: null,
+    uid: null,
+    hasVault: false,
+    passkeyEnrolled: false,
+    passkeyLoginAvailable: false,
+    trustedLeaseActive: false
+};
 
 async function readActiveKey(): Promise<ActiveKeyInfo> {
+    let hasKey = false;
+    let publicKey: string | null = null;
     try {
         if (await cryptoService.hasStoredKey()) {
-            const userData = await cryptoService.getUserData().catch(() => null);
-            return {
-                hasKey: true,
-                publicKey: await cryptoService.getPublicKey(),
-                uid: userData?.uid || userData?.username || null
-            };
+            hasKey = true;
+            try { publicKey = await cryptoService.getPublicKey(); } catch { /* ignore */ }
         }
-    } catch {
-        // fall through
-    }
-    return { hasKey: false, publicKey: null, uid: null };
+    } catch { /* ignore */ }
+
+    const userData = await cryptoService.getUserData().catch(() => null);
+    const uid = userData?.uid || userData?.username || null;
+    if (!publicKey && userData?.pubkey) publicKey = userData.pubkey;
+
+    let hasVault = false;
+    let passkeyEnrolled = false;
+    let passkeyLoginAvailable = false;
+    let trustedLeaseActive = false;
+    try {
+        const state = await cryptoService.getPasskeyEnrollmentState();
+        hasVault = Boolean(state?.hasEncryptedVault);
+        passkeyEnrolled = Boolean(state?.enrolled);
+        passkeyLoginAvailable = Boolean(state?.passkeyLoginAvailable);
+        trustedLeaseActive = Boolean(state?.trustedLeaseActive);
+    } catch { /* ignore */ }
+
+    return { hasKey, publicKey, uid, hasVault, passkeyEnrolled, passkeyLoginAvailable, trustedLeaseActive };
 }
 
-function ModeTabs({ mode, setMode, hasKey }: { mode: Mode; setMode: (m: Mode) => void; hasKey: boolean; }) {
+function ModeTabs({ mode, setMode, info }: { mode: Mode; setMode: (m: Mode) => void; info: ActiveKeyInfo; }) {
+    const statusLabel = info.hasKey
+        ? "Active key"
+        : (info.hasVault ? "Locked vault" : "No key");
     const tabs: Array<[Mode, string, boolean]> = [
-        ["status", hasKey ? "Active key" : "No key", true],
+        ["status", statusLabel, true],
         ["paste", "Paste hex", true],
         ["import", "Import backup", true],
         ["generate", "Generate", true],
-        ["export", "Export backup", hasKey]
+        ["export", "Export backup", info.hasKey]
     ];
     return (
         <div className="vc-veil-tabs">
@@ -76,34 +110,79 @@ function StatusPanel({ info, refresh, onClose }: { info: ActiveKeyInfo; refresh:
         setBusy(true);
         try {
             await cryptoService.clearActivePrivateKeyOnly();
-            showToast("Vault locked. Re-authenticate to use it again.", Toasts.Type.SUCCESS);
+            showToast("Vault locked. Reload Discord or use your passkey to unlock it again.", Toasts.Type.SUCCESS);
             await refresh();
         } catch (e: any) {
-            showToast(e?.message || "Failed to lock vault", Toasts.Type.FAILURE);
+            showToast(e?.message || "Couldn't lock the vault", Toasts.Type.FAILURE);
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function unlockWithPasskey() {
+        setBusy(true);
+        try {
+            await cryptoService.unlockWithEnrolledPasskey();
+            showToast("Vault unlocked.", Toasts.Type.SUCCESS);
+            await refresh();
+        } catch (e: any) {
+            showToast(e?.message || "Couldn't unlock the vault", Toasts.Type.FAILURE);
         } finally {
             setBusy(false);
         }
     }
 
     async function wipe() {
-        if (!confirm("This will permanently delete the encrypted vault, lease, and any passkey enrollment from this device. The remote account is not affected. Continue?")) return;
+        if (!confirm("This will permanently delete the encrypted vault, the trusted-device lease, and any passkey enrolled on this device. Your remote account isn't affected. Continue?")) return;
         setBusy(true);
         try {
             await cryptoService.clearStoredKey();
             showToast("Local Veil keys removed.", Toasts.Type.SUCCESS);
             await refresh();
         } catch (e: any) {
-            showToast(e?.message || "Failed to remove keys", Toasts.Type.FAILURE);
+            showToast(e?.message || "Couldn't remove the local keys", Toasts.Type.FAILURE);
         } finally {
             setBusy(false);
         }
     }
 
+    if (!info.hasKey && info.hasVault) {
+        return (
+            <Flex flexDirection="column" gap={10}>
+                <section>
+                    <HeadingSecondary>Vault locked</HeadingSecondary>
+                    {info.publicKey
+                        ? <PubkeyChip publicKey={info.publicKey} />
+                        : <Paragraph className="vc-veil-muted">(your public key will appear once the vault is unlocked)</Paragraph>}
+                </section>
+                <Paragraph>
+                    Your encrypted vault is still saved locally. Only the unlocked copy in memory was cleared.
+                    {info.trustedLeaseActive && " Reloading Discord will unlock it again automatically through the trusted-device lease."}
+                    {!info.trustedLeaseActive && " The trusted-device lease has expired, so you'll need to unlock with your passkey or re-import the encrypted backup."}
+                </Paragraph>
+                <Flex gap={8} style={{ flexWrap: "wrap" }}>
+                    {info.passkeyLoginAvailable && (
+                        <Button variant="primary" disabled={busy} onClick={unlockWithPasskey}>
+                            {busy ? "Unlocking…" : "Unlock with passkey"}
+                        </Button>
+                    )}
+                    <Button variant="secondary" disabled={busy} onClick={() => location.reload()}>
+                        Reload Discord
+                    </Button>
+                    <Button variant="dangerPrimary" disabled={busy} onClick={wipe}>
+                        Remove local keys
+                    </Button>
+                    <Button variant="secondary" onClick={onClose}>Close</Button>
+                </Flex>
+            </Flex>
+        );
+    }
+
     if (!info.hasKey) {
         return (
             <Paragraph>
-                No private key is currently linked to this Discord client. Use one of the tabs above to paste an existing
-                key, import an encrypted <code>veil-key-backup</code> file, or generate a new keypair.
+                There's no private key linked to this client yet. Use one of the tabs above to paste an existing key,
+                import an encrypted <code>veil-key-backup</code> file, or generate a fresh keypair.
             </Paragraph>
         );
     }
@@ -115,8 +194,8 @@ function StatusPanel({ info, refresh, onClose }: { info: ActiveKeyInfo; refresh:
                 {info.publicKey ? <PubkeyChip publicKey={info.publicKey} /> : <Paragraph>(unavailable)</Paragraph>}
             </section>
             <Paragraph>
-                The matching private key is stored in the encrypted local vault (AES-GCM) and unlocked by a 30-day
-                trusted-device lease — same scheme as veil-frontend.
+                Your private key lives in an encrypted local vault (AES-GCM) and stays unlocked through a 30-day
+                trusted-device lease. It's the same setup veil-frontend uses.
             </Paragraph>
             <Flex gap={8} style={{ flexWrap: "wrap" }}>
                 <Button variant="secondary" disabled={busy} onClick={lock}>Lock vault</Button>
@@ -146,7 +225,7 @@ function PastePanel({ existing, refresh }: { existing: boolean; refresh: () => P
             setHex("");
             await refresh();
         } catch (e: any) {
-            setError(e?.message || "Failed to link key");
+            setError(e?.message || "Couldn't link that key");
         } finally {
             setBusy(false);
         }
@@ -155,7 +234,7 @@ function PastePanel({ existing, refresh }: { existing: boolean; refresh: () => P
     return (
         <Flex flexDirection="column" gap={10}>
             <Paragraph>
-                Paste a 64-character hex Ed25519 private key. {existing && "This will REPLACE the currently linked key."}
+                Paste a 64-character hex Ed25519 private key. {existing && "This will replace the key that's currently linked."}
             </Paragraph>
             <TextInput
                 type="password"
@@ -165,7 +244,7 @@ function PastePanel({ existing, refresh }: { existing: boolean; refresh: () => P
             />
             {hex && !valid && (
                 <Paragraph className="vc-veil-error">
-                    Invalid private key — must be exactly 64 hex characters.
+                    That doesn't look right. A private key must be exactly 64 hex characters.
                 </Paragraph>
             )}
             {error && <Paragraph className="vc-veil-error">{error}</Paragraph>}
@@ -202,11 +281,11 @@ function ImportPanel({ existing, refresh }: { existing: boolean; refresh: () => 
         try {
             const text = await file.text();
             const parsed = JSON.parse(text);
-            if (!ensureBackupShape(parsed)) throw new Error("Selected file is not a valid encrypted Veil backup");
+            if (!ensureBackupShape(parsed)) throw new Error("That file isn't a valid encrypted Veil backup.");
             setPayload(parsed);
             setFileName(file.name);
         } catch (err: any) {
-            setError(err?.message || "Failed to read backup file");
+            setError(err?.message || "Couldn't read the backup file");
             setPayload(null);
             setFileName("");
         }
@@ -219,13 +298,13 @@ function ImportPanel({ existing, refresh }: { existing: boolean; refresh: () => 
         try {
             const { privateKey } = await cryptoService.decryptEncryptedPrivateKeyBackup(payload, password);
             await cryptoService.forceSetPrivateKey(privateKey);
-            showToast("Backup unlocked and key linked.", Toasts.Type.SUCCESS);
+            showToast("Backup unlocked. Your key is now linked.", Toasts.Type.SUCCESS);
             setPayload(null);
             setFileName("");
             setPassword("");
             await refresh();
         } catch (e: any) {
-            setError(e?.message || "Failed to unlock backup");
+            setError(e?.message || "Couldn't unlock that backup");
         } finally {
             setBusy(false);
         }
@@ -234,8 +313,8 @@ function ImportPanel({ existing, refresh }: { existing: boolean; refresh: () => 
     return (
         <Flex flexDirection="column" gap={10}>
             <Paragraph>
-                Import an encrypted backup exported from veil-frontend (<code>veil-key-backup</code> v1 JSON).
-                {existing && " The currently linked key will be REPLACED."}
+                Import an encrypted backup exported from veil-frontend (a <code>veil-key-backup</code> v1 JSON file).
+                {existing && " The currently linked key will be replaced."}
             </Paragraph>
             <input
                 ref={fileRef}
@@ -263,7 +342,7 @@ function ImportPanel({ existing, refresh }: { existing: boolean; refresh: () => 
             {error && <Paragraph className="vc-veil-error">{error}</Paragraph>}
             <Flex gap={8}>
                 <Button variant="primary" disabled={!payload || !password || busy} onClick={unlock}>
-                    {busy ? "Unlocking…" : "Unlock & link"}
+                    {busy ? "Unlocking…" : "Unlock and link"}
                 </Button>
             </Flex>
         </Flex>
@@ -276,7 +355,7 @@ function GeneratePanel({ existing, refresh }: { existing: boolean; refresh: () =
     const [error, setError] = useState<string | null>(null);
 
     async function generate() {
-        if (existing && !confirm("A private key is already linked. Generating will REPLACE it. Continue?")) return;
+        if (existing && !confirm("A private key is already linked. Generating a new one will replace it. Continue?")) return;
         setBusy(true);
         setError(null);
         try {
@@ -284,12 +363,12 @@ function GeneratePanel({ existing, refresh }: { existing: boolean; refresh: () =
                 await cryptoService.clearStoredKey();
             }
             const { publicKey, privateKey } = await cryptoService.generateKeys();
-            if (!privateKey) throw new Error("Generation returned no private key");
+            if (!privateKey) throw new Error("The generator didn't return a private key.");
             setRevealed({ publicKey, privateKey });
             showToast("New keypair generated and linked.", Toasts.Type.SUCCESS);
             await refresh();
         } catch (e: any) {
-            setError(e?.message || "Failed to generate key");
+            setError(e?.message || "Couldn't generate a new keypair");
         } finally {
             setBusy(false);
         }
@@ -300,16 +379,16 @@ function GeneratePanel({ existing, refresh }: { existing: boolean; refresh: () =
             await navigator.clipboard.writeText(value);
             showToast(`${label} copied`, Toasts.Type.SUCCESS);
         } catch {
-            showToast("Clipboard unavailable", Toasts.Type.FAILURE);
+            showToast("Clipboard isn't available right now", Toasts.Type.FAILURE);
         }
     }
 
     return (
         <Flex flexDirection="column" gap={10}>
             <Paragraph>
-                Generate a fresh Ed25519 keypair and link it. {existing && "Existing local keys will be wiped first."}
+                Generate a fresh Ed25519 keypair and link it.{existing && " Your existing local keys will be wiped first."}
                 {" "}
-                <strong>Save the private key to a safe place — losing it means losing access to anything signed with it.</strong>
+                <strong>Save the private key somewhere safe. If you lose it, you lose access to anything signed with it.</strong>
             </Paragraph>
             {error && <Paragraph className="vc-veil-error">{error}</Paragraph>}
             {revealed ? (
@@ -319,7 +398,7 @@ function GeneratePanel({ existing, refresh }: { existing: boolean; refresh: () =
                         <PubkeyChip publicKey={revealed.publicKey} />
                     </section>
                     <section>
-                        <HeadingSecondary>Private key (hex) — copy now</HeadingSecondary>
+                        <HeadingSecondary>Private key (hex), copy it now</HeadingSecondary>
                         <PubkeyChip publicKey={revealed.privateKey} />
                     </section>
                     <Flex gap={8} style={{ flexWrap: "wrap" }}>
@@ -332,8 +411,8 @@ function GeneratePanel({ existing, refresh }: { existing: boolean; refresh: () =
                         <Button variant="primary" onClick={() => setRevealed(null)}>Done</Button>
                     </Flex>
                     <BaseText size="sm" className="vc-veil-warning">
-                        This is the only time the private key is shown. Use the encrypted backup flow in veil-frontend
-                        to make a recoverable copy.
+                        This is the only time the private key will be shown. Use the encrypted backup flow in
+                        veil-frontend to make a recoverable copy.
                     </BaseText>
                 </Flex>
             ) : (
@@ -460,11 +539,11 @@ function ExportPanel({ info }: { info: ActiveKeyInfo; }) {
     async function exportFile() {
         setError(null);
         if (!evalResult.isAcceptable) {
-            setError("Password must be at least 12 chars and include upper, lower, number, and symbol");
+            setError("Your password needs at least 12 characters with an uppercase letter, a lowercase letter, a number, and a symbol.");
             return;
         }
         if (!matches) {
-            setError("Password confirmation does not match");
+            setError("The password and its confirmation don't match.");
             return;
         }
         setBusy(true);
@@ -472,12 +551,12 @@ function ExportPanel({ info }: { info: ActiveKeyInfo; }) {
             const payload = await cryptoService.createEncryptedPrivateKeyBackup(password);
             const fileName = `${buildBackupFileBaseName(info.uid)}.json`;
             downloadJson(JSON.stringify(payload, null, 2), fileName);
-            showToast("Encrypted key backup downloaded", Toasts.Type.SUCCESS);
+            showToast("Encrypted backup downloaded.", Toasts.Type.SUCCESS);
             setPassword("");
             setConfirm("");
         } catch (e: any) {
-            setError(e?.message || "Failed to export backup");
-            showToast(e?.message || "Failed to export backup", Toasts.Type.FAILURE);
+            setError(e?.message || "Couldn't export the backup");
+            showToast(e?.message || "Couldn't export the backup", Toasts.Type.FAILURE);
         } finally {
             setBusy(false);
         }
@@ -486,9 +565,10 @@ function ExportPanel({ info }: { info: ActiveKeyInfo; }) {
     return (
         <Flex flexDirection="column" gap={12}>
             <div className="vc-veil-info-card">
-                This backup is encrypted locally with PBKDF2-SHA256 (600k iterations) + AES-GCM before download.
-                Same <code>veil-key-backup</code> v1 format the web frontend uses — it can be loaded back via the
-                Import backup tab here, or via the login page on veil.rip. Keep the password and file private.
+                The backup is encrypted locally with PBKDF2-SHA256 (600k iterations) and AES-GCM before it leaves your
+                device. It uses the same <code>veil-key-backup</code> v1 format as the web frontend, so you can load it
+                back from the Import backup tab here or from the login page on veil.rip. Keep both the password and the
+                file private.
             </div>
 
             <section>
@@ -513,20 +593,20 @@ function ExportPanel({ info }: { info: ActiveKeyInfo; }) {
                 />
                 {confirm && !matches && (
                     <Paragraph className="vc-veil-error">
-                        Passwords do not match.
+                        Passwords don't match.
                     </Paragraph>
                 )}
             </section>
 
             <Paragraph className="vc-veil-muted">
-                Losing this password means losing access to anything signed with the key. There is no recovery.
+                If you lose this password, you lose access to anything signed with the key. There's no recovery.
             </Paragraph>
 
             {error && <Paragraph className="vc-veil-error">{error}</Paragraph>}
 
             <Flex gap={8}>
                 <Button variant="primary" disabled={!ready} onClick={exportFile}>
-                    {busy ? "Encrypting…" : "Download Encrypted File"}
+                    {busy ? "Encrypting…" : "Download encrypted file"}
                 </Button>
             </Flex>
         </Flex>
@@ -534,24 +614,33 @@ function ExportPanel({ info }: { info: ActiveKeyInfo; }) {
 }
 
 export function LinkKeyModal({ modalProps }: { modalProps: ModalProps; }) {
-    const [info, setInfo] = useState<ActiveKeyInfo>({ hasKey: false, publicKey: null, uid: null });
+    const [info, setInfo] = useState<ActiveKeyInfo>(EMPTY_KEY_INFO);
     const [mode, setMode] = useState<Mode>("import");
+    const initialModeApplied = useRef(false);
 
     const refresh = async () => setInfo(await readActiveKey());
 
     useEffect(() => { void refresh(); }, []);
 
+    useEffect(() => {
+        if (initialModeApplied.current) return;
+        if (info.hasKey || info.hasVault) {
+            setMode("status");
+        }
+        initialModeApplied.current = true;
+    }, [info.hasKey, info.hasVault]);
+
     return (
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className="vc-veil-modal">
             <ModalHeader>
                 <BaseText size="lg" weight="semibold" style={{ flexGrow: 1 }}>
-                    Veil — Link Private Key
+                    Manage your Veil key
                 </BaseText>
                 <ModalCloseButton onClick={modalProps.onClose} />
             </ModalHeader>
 
             <ModalContent>
-                <ModeTabs mode={mode} setMode={setMode} hasKey={info.hasKey} />
+                <ModeTabs mode={mode} setMode={setMode} info={info} />
                 {mode === "status" && <StatusPanel info={info} refresh={refresh} onClose={modalProps.onClose} />}
                 {mode === "paste" && <PastePanel existing={info.hasKey} refresh={refresh} />}
                 {mode === "import" && <ImportPanel existing={info.hasKey} refresh={refresh} />}

@@ -137,14 +137,14 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
     return (
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM}>
             <ModalHeader>
-                <BaseText size="lg" weight="semibold" style={{ flexGrow: 1 }}>Sign & send via Veil</BaseText>
+                <BaseText size="lg" weight="semibold" style={{ flexGrow: 1 }}>Sign and send via Veil</BaseText>
                 <ModalCloseButton onClick={modalProps.onClose} />
             </ModalHeader>
 
             <ModalContent>
                 <Flex flexDirection="column" gap={12}>
                     <Paragraph>
-                        Sign a message with your linked Ed25519 key. Veil registers the signature with the backend and embeds a tiny lookup id; recipients running Veil verify the signature and see a "Signed" flair.
+                        Sign a message with your linked Ed25519 key. Veil registers the signature with the backend and embeds a tiny lookup id, so recipients running Veil can verify the signature and see a "Signed" flair.
                     </Paragraph>
 
                     <section>
@@ -163,8 +163,8 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
                         ) : (
                             <Flex flexDirection="column" gap={8}>
                                 <Paragraph style={{ color: "var(--status-danger)" }}>
-                                    No private key is linked to this client. All Veil signing goes through the shared
-                                    VeilCrypto vault — link one first.
+                                    There's no private key linked to this client. All Veil signing goes through the shared
+                                    VeilCrypto vault, so you'll need to link one first.
                                 </Paragraph>
                                 <Flex gap={8}>
                                     <Button variant="primary" onClick={openLinkKey}>Link a key…</Button>
@@ -178,7 +178,7 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
                         <TextArea value={message} onChange={setMessage} placeholder="Message to sign..." />
                         {messageTooLong && (
                             <Paragraph style={{ color: "var(--status-danger)" }}>
-                                Message too long — max {MAX_MESSAGE_LEN} chars (signed-id payload reserves {VeilZwc.ZWC_OVERHEAD_CHARS}).
+                                That's a bit long. The maximum is {MAX_MESSAGE_LEN} characters (the signed-id payload reserves {VeilZwc.ZWC_OVERHEAD_CHARS}).
                             </Paragraph>
                         )}
                     </section>
@@ -192,7 +192,7 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
             <ModalFooter>
                 <Flex gap={8}>
                     <Button variant="primary" disabled={!canSign} onClick={handleSign}>
-                        {busy ? "Signing…" : "Sign & send"}
+                        {busy ? "Signing…" : "Sign and send"}
                     </Button>
                     <Button variant="secondary" onClick={modalProps.onClose}>
                         Cancel
