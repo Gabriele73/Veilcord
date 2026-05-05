@@ -1,8 +1,10 @@
 /*
- * Accessory styles. The raw veil-sig code block is hidden at runtime via a
- * DOM walker in Accessory.tsx (highlight.js drops the unknown language class,
- * so a `:has()` selector wouldn't match), so this file only handles the
- * cleaned body + the "Signed" flair styling.
+ * Accessory styles only. The modal uses native Vencord/Discord components
+ * (Card, Heading, CodeBlock, Paragraph) so no modal CSS is needed here.
+ *
+ * The raw veil-sig code block is hidden at runtime via a DOM walker in
+ * Accessory.tsx (highlight.js drops the unknown language class, so a
+ * `:has()` selector can't match).
  */
 
 .vc-veil-sig {
@@ -50,98 +52,4 @@
 
 .vc-veil-sig-flair:active {
     transform: translateY(1px);
-}
-
-/* --- Verify modal --- */
-
-.vc-veil-sig-modal-section {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.vc-veil-sig-modal-label {
-    color: var(--header-secondary);
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    line-height: 1;
-}
-
-.vc-veil-sig-modal-message {
-    background: var(--background-secondary);
-    color: var(--text-default, var(--text-normal));
-    padding: 10px 12px;
-    border-radius: 6px;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-family: var(--font-primary);
-    font-size: 0.95rem;
-    line-height: 1.4;
-    margin: 0;
-}
-
-.vc-veil-sig-modal-hex-row {
-    display: flex;
-    align-items: stretch;
-    gap: 8px;
-}
-
-.vc-veil-sig-modal-hex {
-    flex: 1;
-    min-width: 0;
-    background: var(--background-secondary);
-    color: var(--text-default, var(--text-normal));
-    padding: 8px 10px;
-    border-radius: 6px;
-    font-family: var(--font-code, ui-monospace, Menlo, Consolas, monospace);
-    font-size: 0.8rem;
-    word-break: break-all;
-    white-space: pre-wrap;
-    line-height: 1.35;
-}
-
-.vc-veil-sig-modal-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 0.9rem;
-    line-height: 1.2;
-}
-
-.vc-veil-sig-modal-status--verifying {
-    background: color-mix(in oklab, var(--background-tertiary) 80%, transparent);
-    color: var(--text-muted);
-}
-
-.vc-veil-sig-modal-status--valid {
-    background: color-mix(in oklab, var(--status-positive) 15%, transparent);
-    color: var(--status-positive);
-}
-
-.vc-veil-sig-modal-status--invalid,
-.vc-veil-sig-modal-status--error {
-    background: color-mix(in oklab, var(--status-danger) 15%, transparent);
-    color: var(--status-danger);
-}
-
-.vc-veil-sig-modal-meta-row {
-    display: flex;
-    gap: 8px;
-    font-size: 0.85rem;
-    color: var(--text-muted);
-}
-
-.vc-veil-sig-modal-meta-row > strong {
-    color: var(--text-default, var(--text-normal));
-    font-weight: 600;
-}
-
-.vc-veil-sig-modal-copy-hint {
-    color: var(--status-positive);
-    font-size: 0.8rem;
 }

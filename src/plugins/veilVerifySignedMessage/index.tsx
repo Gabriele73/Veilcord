@@ -27,7 +27,7 @@ export default definePlugin({
     start() {
         addMessageAccessory(ACCESSORY_ID, props => (
             <VeilSigAccessory message={(props as any).message} />
-        ), -1);
+        ), 0);
     },
 
     stop() {

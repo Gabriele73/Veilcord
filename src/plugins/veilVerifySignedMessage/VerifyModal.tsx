@@ -6,14 +6,26 @@
 
 import { BaseText } from "@components/BaseText";
 import { Button } from "@components/Button";
+import { Card } from "@components/Card";
+import { CodeBlock } from "@components/CodeBlock";
+import { Divider } from "@components/Divider";
 import { Flex } from "@components/Flex";
+import { HeadingTertiary } from "@components/Heading";
+import { Paragraph } from "@components/Paragraph";
 import { cryptoService } from "@plugins/veilCrypto";
 import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
-import { Text, useEffect, useState } from "@webpack/common";
+import { useEffect, useState } from "@webpack/common";
 
 import { VeilSigPayload } from "./parser";
 
 type Status = "verifying" | "valid" | "invalid" | "error";
+
+const STATUS_VARIANT: Record<Status, "info" | "success" | "danger"> = {
+    verifying: "info",
+    valid: "success",
+    invalid: "danger",
+    error: "danger"
+};
 
 const STATUS_LABEL: Record<Status, string> = {
     verifying: "Verifying signature…",
@@ -63,6 +75,11 @@ export function VerifyModal({
         });
     };
 
+    const statusText =
+        status === "error" && errorMsg
+            ? `${STATUS_LABEL.error}: ${errorMsg}`
+            : STATUS_LABEL[status];
+
     return (
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM}>
             <ModalHeader>
@@ -73,20 +90,25 @@ export function VerifyModal({
             </ModalHeader>
 
             <ModalContent>
-                <Flex flexDirection="column" gap={16} style={{ padding: "4px 0 8px" }}>
-                    <div className={`vc-veil-sig-modal-status vc-veil-sig-modal-status--${status}`}>
-                        {status === "error" && errorMsg ? `${STATUS_LABEL.error}: ${errorMsg}` : STATUS_LABEL[status]}
-                    </div>
+                <Flex flexDirection="column" gap={16} style={{ paddingBottom: 8 }}>
+                    <Card variant={STATUS_VARIANT[status]} defaultPadding>
+                        <Paragraph style={{ margin: 0, fontWeight: 600 }}>{statusText}</Paragraph>
+                    </Card>
 
-                    <div className="vc-veil-sig-modal-section">
-                        <div className="vc-veil-sig-modal-label">Message</div>
-                        <pre className="vc-veil-sig-modal-message">{payload.message}</pre>
-                    </div>
+                    <section>
+                        <HeadingTertiary>Message</HeadingTertiary>
+                        <Card defaultPadding>
+                            <Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                {payload.message}
+                            </Paragraph>
+                        </Card>
+                    </section>
 
-                    <div className="vc-veil-sig-modal-section">
-                        <div className="vc-veil-sig-modal-label">Public key</div>
-                        <div className="vc-veil-sig-modal-hex-row">
-                            <code className="vc-veil-sig-modal-hex">{payload.publicKey}</code>
+                    <Divider />
+
+                    <section>
+                        <Flex justifyContent="space-between" alignItems="center" style={{ marginBottom: 6 }}>
+                            <HeadingTertiary style={{ margin: 0 }}>Public key</HeadingTertiary>
                             <Button
                                 variant="secondary"
                                 size="small"
@@ -94,13 +116,13 @@ export function VerifyModal({
                             >
                                 Copy
                             </Button>
-                        </div>
-                    </div>
+                        </Flex>
+                        <CodeBlock content={payload.publicKey} lang="" />
+                    </section>
 
-                    <div className="vc-veil-sig-modal-section">
-                        <div className="vc-veil-sig-modal-label">Signature</div>
-                        <div className="vc-veil-sig-modal-hex-row">
-                            <code className="vc-veil-sig-modal-hex">{payload.signature}</code>
+                    <section>
+                        <Flex justifyContent="space-between" alignItems="center" style={{ marginBottom: 6 }}>
+                            <HeadingTertiary style={{ margin: 0 }}>Signature</HeadingTertiary>
                             <Button
                                 variant="secondary"
                                 size="small"
@@ -108,37 +130,38 @@ export function VerifyModal({
                             >
                                 Copy
                             </Button>
-                        </div>
-                    </div>
+                        </Flex>
+                        <CodeBlock content={payload.signature} lang="" />
+                    </section>
 
                     {(authorTag || timestamp || payload.v != null) && (
-                        <div className="vc-veil-sig-modal-section">
-                            <div className="vc-veil-sig-modal-label">Metadata</div>
-                            <Flex flexDirection="column" gap={4}>
-                                {authorTag && (
-                                    <div className="vc-veil-sig-modal-meta-row">
-                                        <strong>From</strong>
-                                        <Text variant="text-sm/normal">{authorTag}</Text>
-                                    </div>
-                                )}
-                                {timestamp && (
-                                    <div className="vc-veil-sig-modal-meta-row">
-                                        <strong>Sent</strong>
-                                        <Text variant="text-sm/normal">{timestamp}</Text>
-                                    </div>
-                                )}
-                                {payload.v != null && (
-                                    <div className="vc-veil-sig-modal-meta-row">
-                                        <strong>Payload version</strong>
-                                        <Text variant="text-sm/normal">{String(payload.v)}</Text>
-                                    </div>
-                                )}
-                            </Flex>
-                        </div>
+                        <>
+                            <Divider />
+                            <section>
+                                <HeadingTertiary>Metadata</HeadingTertiary>
+                                <Flex flexDirection="column" gap={4}>
+                                    {authorTag && (
+                                        <Paragraph style={{ margin: 0 }}>
+                                            <strong>From:</strong> {authorTag}
+                                        </Paragraph>
+                                    )}
+                                    {timestamp && (
+                                        <Paragraph style={{ margin: 0 }}>
+                                            <strong>Sent:</strong> {timestamp}
+                                        </Paragraph>
+                                    )}
+                                    {payload.v != null && (
+                                        <Paragraph style={{ margin: 0 }}>
+                                            <strong>Payload version:</strong> {String(payload.v)}
+                                        </Paragraph>
+                                    )}
+                                </Flex>
+                            </section>
+                        </>
                     )}
 
                     {copyHint && (
-                        <div className="vc-veil-sig-modal-copy-hint">{copyHint}</div>
+                        <Paragraph style={{ margin: 0, color: "var(--status-positive)" }}>{copyHint}</Paragraph>
                     )}
                 </Flex>
             </ModalContent>
