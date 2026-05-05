@@ -1,22 +1,9 @@
 /*
- * Accessory styles only. The modal uses native Vencord/Discord components
- * (Card, Heading, CodeBlock, Paragraph) so no modal CSS is needed here.
- *
- * The raw veil-sig code block is hidden at runtime via a DOM walker in
- * Accessory.tsx (highlight.js drops the unknown language class, so a
- * `:has()` selector can't match).
+ * Flair styles for the Veil "Signed" pill rendered next to the author via
+ * the MessageDecorations API. The visible message body is plain text (the
+ * signature is encoded in trailing zero-width characters) so it renders
+ * natively without any extra wrapping.
  */
-
-.vc-veil-sig {
-    display: inline;
-    vertical-align: baseline;
-}
-
-.vc-veil-sig-body {
-    display: inline;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
 
 .vc-veil-sig-flair {
     display: inline-flex;

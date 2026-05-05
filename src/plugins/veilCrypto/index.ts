@@ -14,6 +14,7 @@ import { cryptoService, CryptoService } from "./service";
 export { cryptoService, CryptoService };
 export * as VeilCryptoUtils from "./utils";
 export * as VeilEd25519 from "./ed25519";
+export * as VeilZwc from "./zwc";
 
 export default definePlugin({
     name: "VeilCrypto",

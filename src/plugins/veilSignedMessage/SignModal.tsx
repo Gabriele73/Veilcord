@@ -10,12 +10,14 @@ import { Flex } from "@components/Flex";
 import { FormSwitch } from "@components/FormSwitch";
 import { HeadingSecondary } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
-import { cryptoService, VeilEd25519 } from "@plugins/veilCrypto";
+import { cryptoService, VeilEd25519, VeilZwc } from "@plugins/veilCrypto";
 import { sendMessage } from "@utils/discord";
 import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
 import { TextArea, TextInput, useEffect, useState } from "@webpack/common";
 
 const HEX64 = /^[0-9a-fA-F]{64}$/;
+const DISCORD_MAX = 2000;
+const MAX_MESSAGE_LEN = DISCORD_MAX - VeilZwc.ZWC_OVERHEAD_CHARS;
 
 export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; channelId: string; }) {
     const [message, setMessage] = useState("");
@@ -43,7 +45,8 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
     const trimmedKey = privateKey.trim();
     const privateKeyValid = HEX64.test(trimmedKey);
     const messageReady = message.trim().length > 0;
-    const canSign = !busy && messageReady && (useStored ? storedAvailable : privateKeyValid);
+    const messageTooLong = message.length > MAX_MESSAGE_LEN;
+    const canSign = !busy && messageReady && !messageTooLong && (useStored ? storedAvailable : privateKeyValid);
 
     async function handleSign() {
         setBusy(true);
@@ -61,14 +64,7 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
                 signature = await VeilEd25519.sign(pk, message);
             }
 
-            const payload = {
-                veil: "signed-message",
-                v: 1,
-                message,
-                publicKey,
-                signature
-            };
-            const content = "```veil-sig\n" + JSON.stringify(payload) + "\n```";
+            const content = message + VeilZwc.encodeSignature(publicKey, signature);
 
             await sendMessage(channelId, { content });
             modalProps.onClose();
@@ -95,6 +91,11 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
                     <section>
                         <HeadingSecondary>Message</HeadingSecondary>
                         <TextArea value={message} onChange={setMessage} placeholder="Message to sign..." />
+                        {messageTooLong && (
+                            <Paragraph style={{ color: "var(--status-danger)" }}>
+                                Message too long — max {MAX_MESSAGE_LEN} chars (signature payload reserves {VeilZwc.ZWC_OVERHEAD_CHARS}).
+                            </Paragraph>
+                        )}
                     </section>
 
                     {storedAvailable && (
