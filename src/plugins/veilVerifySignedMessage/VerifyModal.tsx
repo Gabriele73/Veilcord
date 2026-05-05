@@ -7,21 +7,19 @@
 import { BaseText } from "@components/BaseText";
 import { Button } from "@components/Button";
 import { Flex } from "@components/Flex";
-import { HeadingSecondary } from "@components/Heading";
-import { Paragraph } from "@components/Paragraph";
 import { cryptoService } from "@plugins/veilCrypto";
 import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
-import { useEffect, useState } from "@webpack/common";
+import { Text, useEffect, useState } from "@webpack/common";
 
 import { VeilSigPayload } from "./parser";
 
 type Status = "verifying" | "valid" | "invalid" | "error";
 
-const STATUS_COLOR: Record<Status, string> = {
-    verifying: "var(--text-muted)",
-    valid: "var(--status-positive)",
-    invalid: "var(--status-danger)",
-    error: "var(--status-danger)"
+const STATUS_LABEL: Record<Status, string> = {
+    verifying: "Verifying signature…",
+    valid: "Signature is valid",
+    invalid: "Signature does NOT match this public key",
+    error: "Verification failed"
 };
 
 export function VerifyModal({
@@ -65,58 +63,30 @@ export function VerifyModal({
         });
     };
 
-    const statusLabel: Record<Status, string> = {
-        verifying: "Verifying signature…",
-        valid: "Signature is valid",
-        invalid: "Signature does NOT match this public key",
-        error: errorMsg ? `Verification failed: ${errorMsg}` : "Verification failed"
-    };
-
-    const codeStyle: React.CSSProperties = {
-        display: "block",
-        wordBreak: "break-all",
-        padding: "6px 8px",
-        background: "var(--background-secondary)",
-        borderRadius: 4,
-        fontFamily: "var(--font-code)",
-        fontSize: 12,
-        flex: 1
-    };
-
     return (
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM}>
             <ModalHeader>
-                <BaseText size="lg" weight="semibold" style={{ flexGrow: 1 }}>Veil signed message</BaseText>
+                <BaseText size="lg" weight="semibold" style={{ flexGrow: 1 }}>
+                    Veil signed message
+                </BaseText>
                 <ModalCloseButton onClick={modalProps.onClose} />
             </ModalHeader>
 
             <ModalContent>
-                <Flex flexDirection="column" gap={12}>
-                    <Paragraph style={{ color: STATUS_COLOR[status], fontWeight: 600 }}>
-                        {statusLabel[status]}
-                    </Paragraph>
+                <Flex flexDirection="column" gap={16} style={{ padding: "4px 0 8px" }}>
+                    <div className={`vc-veil-sig-modal-status vc-veil-sig-modal-status--${status}`}>
+                        {status === "error" && errorMsg ? `${STATUS_LABEL.error}: ${errorMsg}` : STATUS_LABEL[status]}
+                    </div>
 
-                    <section>
-                        <HeadingSecondary>Message</HeadingSecondary>
-                        <pre
-                            style={{
-                                whiteSpace: "pre-wrap",
-                                wordBreak: "break-word",
-                                padding: "8px 10px",
-                                background: "var(--background-secondary)",
-                                borderRadius: 4,
-                                margin: 0,
-                                fontFamily: "var(--font-primary)"
-                            }}
-                        >
-                            {payload.message}
-                        </pre>
-                    </section>
+                    <div className="vc-veil-sig-modal-section">
+                        <div className="vc-veil-sig-modal-label">Message</div>
+                        <pre className="vc-veil-sig-modal-message">{payload.message}</pre>
+                    </div>
 
-                    <section>
-                        <HeadingSecondary>Public key</HeadingSecondary>
-                        <Flex gap={8} alignItems="center">
-                            <code style={codeStyle}>{payload.publicKey}</code>
+                    <div className="vc-veil-sig-modal-section">
+                        <div className="vc-veil-sig-modal-label">Public key</div>
+                        <div className="vc-veil-sig-modal-hex-row">
+                            <code className="vc-veil-sig-modal-hex">{payload.publicKey}</code>
                             <Button
                                 variant="secondary"
                                 size="small"
@@ -124,13 +94,13 @@ export function VerifyModal({
                             >
                                 Copy
                             </Button>
-                        </Flex>
-                    </section>
+                        </div>
+                    </div>
 
-                    <section>
-                        <HeadingSecondary>Signature</HeadingSecondary>
-                        <Flex gap={8} alignItems="center">
-                            <code style={codeStyle}>{payload.signature}</code>
+                    <div className="vc-veil-sig-modal-section">
+                        <div className="vc-veil-sig-modal-label">Signature</div>
+                        <div className="vc-veil-sig-modal-hex-row">
+                            <code className="vc-veil-sig-modal-hex">{payload.signature}</code>
                             <Button
                                 variant="secondary"
                                 size="small"
@@ -138,22 +108,37 @@ export function VerifyModal({
                             >
                                 Copy
                             </Button>
-                        </Flex>
-                    </section>
+                        </div>
+                    </div>
 
                     {(authorTag || timestamp || payload.v != null) && (
-                        <section>
-                            <HeadingSecondary>Metadata</HeadingSecondary>
+                        <div className="vc-veil-sig-modal-section">
+                            <div className="vc-veil-sig-modal-label">Metadata</div>
                             <Flex flexDirection="column" gap={4}>
-                                {authorTag && <Paragraph>From: {authorTag}</Paragraph>}
-                                {timestamp && <Paragraph>Sent: {timestamp}</Paragraph>}
-                                {payload.v != null && <Paragraph>Payload version: {payload.v}</Paragraph>}
+                                {authorTag && (
+                                    <div className="vc-veil-sig-modal-meta-row">
+                                        <strong>From</strong>
+                                        <Text variant="text-sm/normal">{authorTag}</Text>
+                                    </div>
+                                )}
+                                {timestamp && (
+                                    <div className="vc-veil-sig-modal-meta-row">
+                                        <strong>Sent</strong>
+                                        <Text variant="text-sm/normal">{timestamp}</Text>
+                                    </div>
+                                )}
+                                {payload.v != null && (
+                                    <div className="vc-veil-sig-modal-meta-row">
+                                        <strong>Payload version</strong>
+                                        <Text variant="text-sm/normal">{String(payload.v)}</Text>
+                                    </div>
+                                )}
                             </Flex>
-                        </section>
+                        </div>
                     )}
 
                     {copyHint && (
-                        <Paragraph style={{ color: "var(--status-positive)" }}>{copyHint}</Paragraph>
+                        <div className="vc-veil-sig-modal-copy-hint">{copyHint}</div>
                     )}
                 </Flex>
             </ModalContent>
