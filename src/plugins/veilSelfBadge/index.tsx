@@ -21,22 +21,52 @@ import { addMessageDecoration, MessageDecorationProps, removeMessageDecoration }
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
-const MY_USER_ID = "287255751368638464";
-// veil v0.0.6
+// veil v0.0.7
 
-const badge: ProfileBadge = {
-    id: "veil-self-badge",
-    description: "Veil",
-    iconSrc: "https://cdn.discordapp.com/badge-icons/5e74e9b61934fc1f67c65515d1f7e60d.png",
-    position: BadgePosition.START,
-    shouldShow: ({ userId }) => userId === MY_USER_ID,
-    link: "https://github.com/"
+type VeilRole = "dev" | "mod" | "staff";
+
+const VEIL_TEAM: Record<string, VeilRole> = {
+    "287255751368638464": "dev",
 };
 
-const VEIL_FLAIR_ID = "veil-user-flair";
+const ROLE_META: Record<VeilRole, { label: string; tooltip: string; gradient: string; iconSrc: string; }> = {
+    dev: {
+        label: "Veil Developer",
+        tooltip: "Veil Developer",
+        gradient: "linear-gradient(135deg, #5865f2, #7289da)",
+        iconSrc: "https://cdn.discordapp.com/badge-icons/5e74e9b61934fc1f67c65515d1f7e60d.png"
+    },
+    mod: {
+        label: "Veil Moderator",
+        tooltip: "Veil Moderator",
+        gradient: "linear-gradient(135deg, #2ecc71, #1f8b4c)",
+        iconSrc: "https://cdn.discordapp.com/badge-icons/5e74e9b61934fc1f67c65515d1f7e60d.png"
+    },
+    staff: {
+        label: "Veil Staff",
+        tooltip: "Veil Staff",
+        gradient: "linear-gradient(135deg, #f1c40f, #c27c0e)",
+        iconSrc: "https://cdn.discordapp.com/badge-icons/5e74e9b61934fc1f67c65515d1f7e60d.png"
+    }
+};
+
+const ROLES = Object.keys(ROLE_META) as VeilRole[];
+
+const badges: ProfileBadge[] = ROLES.map(role => ({
+    id: `veil-team-badge-${role}`,
+    description: ROLE_META[role].tooltip,
+    iconSrc: ROLE_META[role].iconSrc,
+    position: BadgePosition.START,
+    shouldShow: ({ userId }) => VEIL_TEAM[userId] === role,
+    link: "https://github.com/"
+}));
+
+const VEIL_FLAIR_ID = "veil-team-flair";
 
 const VeilFlair = ({ message }: MessageDecorationProps) => {
-    if (message?.author?.id !== MY_USER_ID) return null;
+    const role = message?.author?.id ? VEIL_TEAM[message.author.id] : undefined;
+    if (!role) return null;
+    const meta = ROLE_META[role];
     return (
         <span
             style={{
@@ -45,7 +75,7 @@ const VeilFlair = ({ message }: MessageDecorationProps) => {
                 height: "0.9375rem",
                 padding: "0 0.275rem",
                 borderRadius: "0.1875rem",
-                background: "linear-gradient(135deg, #5865f2, #7289da)",
+                background: meta.gradient,
                 color: "#fff",
                 fontSize: "0.625rem",
                 fontWeight: 600,
@@ -55,26 +85,27 @@ const VeilFlair = ({ message }: MessageDecorationProps) => {
                 verticalAlign: "baseline",
                 lineHeight: 1
             }}
-            aria-label="Veil User"
+            aria-label={meta.label}
         >
-            Veil User
+            {meta.label}
         </span>
     );
 };
 
 export default definePlugin({
-    name: "VeilSelfBadge",
-    description: "Adds a personal badge and 'Veil User' flair to my own Discord profile (client-side only).",
+    name: "VeilTeamBadges",
+    description: "Recognises official Veil project developers, moderators and staff with a profile badge and message flair (client-side only).",
     authors: [Devs.gabriele],
+    dependencies: ["MessageDecorationsAPI"],
     required: true,
 
     start() {
-        addProfileBadge(badge);
+        for (const badge of badges) addProfileBadge(badge);
         addMessageDecoration(VEIL_FLAIR_ID, VeilFlair);
     },
 
     stop() {
-        removeProfileBadge(badge);
+        for (const badge of badges) removeProfileBadge(badge);
         removeMessageDecoration(VEIL_FLAIR_ID);
     }
 });
