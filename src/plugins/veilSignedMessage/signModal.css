@@ -1,0 +1,50 @@
+/*
+ * Veil — sign-and-send modal styles.
+ *
+ * Scopes the same color tokens as linkKeyModal so nested Discord components
+ * (Paragraph, HeadingSecondary, code blocks) never silently inherit
+ * unresolved theme variables. Per CLAUDE.md UI-contrast rule: every token
+ * has an explicit hex fallback so themes that drop the canonical Discord
+ * variables don't collapse text-on-background.
+ */
+
+.vc-veil-modal {
+    --veil-bg-card: var(--background-tertiary, #1e1f22);
+    --veil-bg-input: var(--input-background, #1e1f22);
+    --veil-text-strong: var(--header-primary, #f2f3f5);
+    --veil-text: var(--text-normal, #dbdee1);
+    --veil-text-muted: var(--text-muted, #949ba4);
+    --veil-border: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    --veil-danger: var(--status-danger, #f23f43);
+    --veil-positive: var(--status-positive, #23a55a);
+
+    color: var(--veil-text);
+}
+
+.vc-veil-modal h1,
+.vc-veil-modal h2,
+.vc-veil-modal h3,
+.vc-veil-modal h4,
+.vc-veil-modal h5,
+.vc-veil-modal h6 {
+    color: var(--veil-text-strong);
+}
+
+.vc-veil-modal p,
+.vc-veil-modal span,
+.vc-veil-modal label {
+    color: var(--veil-text);
+}
+
+.vc-veil-sign-pubkey {
+    display: inline-block;
+    padding: 4px 8px;
+    background: var(--background-secondary, #2b2d31);
+    color: var(--veil-text-strong, #f2f3f5);
+    border: 1px solid var(--veil-border);
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: var(--font-code, monospace);
+    word-break: break-all;
+    line-height: 1.4;
+}
