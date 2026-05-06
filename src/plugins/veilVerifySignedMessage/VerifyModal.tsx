@@ -18,23 +18,28 @@ import { useEffect, useState } from "@webpack/common";
 
 import { VeilSigRef } from "./parser";
 
-type Status = "loading" | "verifying" | "valid" | "invalid" | "error";
+type Status = "loading" | "verifying" | "valid" | "invalid" | "error" | "missing";
 
 const STATUS_VARIANT: Record<Status, "info" | "success" | "danger"> = {
     loading: "info",
     verifying: "info",
     valid: "success",
     invalid: "danger",
-    error: "danger"
+    error: "danger",
+    missing: "danger"
 };
 
 const STATUS_LABEL: Record<Status, string> = {
-    loading: "Fetching signed message from Veil…",
+    loading: "Looking for the Veil signature…",
     verifying: "Verifying signature…",
     valid: "Signature is valid",
     invalid: "Signature does NOT match this public key",
-    error: "Verification failed"
+    error: "Verification failed",
+    missing: "No Veil signature record was found for this message"
 };
+
+const FETCH_RETRY_DELAYS_MS = [0, 1500, 4000, 9000, 18000];
+const REGISTERED_EVENT = "veil:signed-message:registered";
 
 interface FetchedRecord {
     id: string | null;
@@ -91,25 +96,50 @@ export function VerifyModal({
 
     useEffect(() => {
         let cancelled = false;
-        (async () => {
-            try {
-                let url: string;
-                if (sigRef.v === 2 && sigRef.id) {
-                    url = `${veilApiBase()}/veilcord/signed-message/${encodeURIComponent(sigRef.id)}`;
-                } else if (discordMessageId) {
-                    url = `${veilApiBase()}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
-                } else {
-                    setStatus("error");
-                    setErrorMsg("No lookup key for this signature.");
-                    return;
-                }
+        let attempt = 0;
 
+        const buildUrl = (): string | null => {
+            if (sigRef.v === 2 && sigRef.id) {
+                return `${veilApiBase()}/veilcord/signed-message/${encodeURIComponent(sigRef.id)}`;
+            }
+            if (discordMessageId) {
+                return `${veilApiBase()}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
+            }
+            return null;
+        };
+
+        const verifyRecord = async (normalized: FetchedRecord) => {
+            const signedBody = normalized.storedMessage ?? strippedContent;
+            try {
+                const ok = await cryptoService.verify(signedBody, normalized.signature, normalized.publicKey);
+                if (cancelled) return;
+                setStatus(ok ? "valid" : "invalid");
+            } catch (e: any) {
+                if (cancelled) return;
+                setStatus("error");
+                setErrorMsg(e?.message || String(e));
+            }
+        };
+
+        const tryFetch = async () => {
+            const url = buildUrl();
+            if (!url) {
+                setStatus("error");
+                setErrorMsg("No lookup key for this signature.");
+                return;
+            }
+            try {
                 const res = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
                 if (cancelled) return;
 
                 if (res.status === 404) {
-                    setStatus("error");
-                    setErrorMsg("Signed message not found on the Veil backend (it may have been deleted).");
+                    if (attempt + 1 < FETCH_RETRY_DELAYS_MS.length) {
+                        attempt++;
+                        setTimeout(() => { if (!cancelled) void tryFetch(); }, FETCH_RETRY_DELAYS_MS[attempt]);
+                        return;
+                    }
+                    setStatus("missing");
+                    setErrorMsg(null);
                     return;
                 }
                 if (!res.ok) {
@@ -129,25 +159,30 @@ export function VerifyModal({
                 }
                 setRecord(normalized);
                 setStatus("verifying");
-
-                const signedBody = normalized.storedMessage ?? strippedContent;
-
-                try {
-                    const ok = await cryptoService.verify(signedBody, normalized.signature, normalized.publicKey);
-                    if (cancelled) return;
-                    setStatus(ok ? "valid" : "invalid");
-                } catch (e: any) {
-                    if (cancelled) return;
-                    setStatus("error");
-                    setErrorMsg(e?.message || String(e));
-                }
+                await verifyRecord(normalized);
             } catch (e: any) {
                 if (cancelled) return;
                 setStatus("error");
                 setErrorMsg(e?.message || String(e));
             }
-        })();
-        return () => { cancelled = true; };
+        };
+
+        const restartFromEvent = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (!detail || detail.discordMessageId !== discordMessageId) return;
+            attempt = 0;
+            setStatus("loading");
+            setErrorMsg(null);
+            setRecord(null);
+            void tryFetch();
+        };
+
+        void tryFetch();
+        window.addEventListener(REGISTERED_EVENT, restartFromEvent as EventListener);
+        return () => {
+            cancelled = true;
+            window.removeEventListener(REGISTERED_EVENT, restartFromEvent as EventListener);
+        };
     }, [sigRef.v, sigRef.id, discordMessageId, strippedContent]);
 
     const copy = (label: string, value: string) => {

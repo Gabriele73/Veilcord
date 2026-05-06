@@ -104,6 +104,13 @@ function onMessageCreate(event: any) {
     if (!pending) return;
 
     void registerOnBackend(message.id, pending.signedBody, pending.publicKey, pending.signature)
+        .then(() => {
+            try {
+                window.dispatchEvent(new CustomEvent("veil:signed-message:registered", {
+                    detail: { discordMessageId: message.id }
+                }));
+            } catch { /* ignore */ }
+        })
         .catch(err => {
             showToast(`Veil: couldn't register signature (${err?.message || err}).`, Toasts.Type.FAILURE);
         });

@@ -71,6 +71,36 @@
 }
 
 /*
+ * Loading variant: backend record not yet fetched (or retrying because the
+ * sender's POST may still be in flight). Muted so it doesn't claim authority
+ * the message hasn't earned.
+ */
+.vc-veil-sig-flair--loading {
+    background: var(--background-modifier-accent, rgba(255, 255, 255, 0.12));
+    color: var(--text-muted, #949ba4);
+}
+
+.vc-veil-sig-flair--loading::before {
+    content: "…";
+    font-weight: 800;
+}
+
+/*
+ * Unverified variant: every retry exhausted with no record. Could be a fake
+ * marker, could be a registration that never landed. Yellow-ish so it reads
+ * as "be careful" without false-positive-ing into red `invalid`.
+ */
+.vc-veil-sig-flair--unverified {
+    background: var(--status-warning, #f0b232);
+    color: #1e1f22;
+}
+
+.vc-veil-sig-flair--unverified::before {
+    content: "?";
+    font-weight: 800;
+}
+
+/*
  * Verify modal: scope the same color tokens as linkKeyModal/signModal so
  * nested Discord components (Paragraph, Heading, CodeBlock) never silently
  * inherit unresolved theme variables. Per CLAUDE.md UI-contrast rule:
