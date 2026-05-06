@@ -157,7 +157,7 @@ export function VerifyModal({
         : null;
 
     return (
-        <ModalRoot {...modalProps} size={ModalSize.MEDIUM}>
+        <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className="vc-veil-modal">
             <ModalHeader>
                 <BaseText size="lg" weight="semibold" style={{ flexGrow: 1 }}>
                     Veil signed message
@@ -257,7 +257,7 @@ export function VerifyModal({
                     )}
 
                     {copyHint && (
-                        <Paragraph style={{ margin: 0, color: "var(--status-positive)" }}>{copyHint}</Paragraph>
+                        <Paragraph style={{ margin: 0, color: "var(--status-positive, #23a55a)" }}>{copyHint}</Paragraph>
                     )}
                 </Flex>
             </ModalContent>

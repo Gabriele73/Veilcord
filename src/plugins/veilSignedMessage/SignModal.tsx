@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import "./signModal.css";
+
 import { BaseText } from "@components/BaseText";
 import { Button } from "@components/Button";
 import { Flex } from "@components/Flex";
@@ -135,7 +137,7 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
     }
 
     return (
-        <ModalRoot {...modalProps} size={ModalSize.MEDIUM}>
+        <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className="vc-veil-modal">
             <ModalHeader>
                 <BaseText size="lg" weight="semibold" style={{ flexGrow: 1 }}>Sign and send via Veil</BaseText>
                 <ModalCloseButton onClick={modalProps.onClose} />
@@ -150,19 +152,12 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
                     <section>
                         <HeadingSecondary>Active key</HeadingSecondary>
                         {keyReady && storedPublicKey ? (
-                            <code style={{
-                                display: "inline-block",
-                                padding: "4px 8px",
-                                background: "var(--background-secondary)",
-                                borderRadius: 4,
-                                fontSize: 12,
-                                wordBreak: "break-all"
-                            }}>
+                            <code className="vc-veil-sign-pubkey">
                                 {storedPublicKey}
                             </code>
                         ) : (
                             <Flex flexDirection="column" gap={8}>
-                                <Paragraph style={{ color: "var(--status-danger)" }}>
+                                <Paragraph style={{ color: "var(--status-danger, #f23f43)" }}>
                                     There's no private key linked to this client. All Veil signing goes through the shared
                                     VeilCrypto vault, so you'll need to link one first.
                                 </Paragraph>
@@ -177,14 +172,14 @@ export function SignModal({ modalProps, channelId }: { modalProps: ModalProps; c
                         <HeadingSecondary>Message</HeadingSecondary>
                         <TextArea value={message} onChange={setMessage} placeholder="Message to sign..." />
                         {messageTooLong && (
-                            <Paragraph style={{ color: "var(--status-danger)" }}>
+                            <Paragraph style={{ color: "var(--status-danger, #f23f43)" }}>
                                 That's a bit long. The maximum is {MAX_MESSAGE_LEN} characters (the signed-id payload reserves {VeilZwc.ZWC_OVERHEAD_CHARS}).
                             </Paragraph>
                         )}
                     </section>
 
                     {error && (
-                        <Paragraph style={{ color: "var(--status-danger)" }}>{error}</Paragraph>
+                        <Paragraph style={{ color: "var(--status-danger, #f23f43)" }}>{error}</Paragraph>
                     )}
                 </Flex>
             </ModalContent>

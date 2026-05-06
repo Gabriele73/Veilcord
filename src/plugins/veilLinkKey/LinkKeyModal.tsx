@@ -11,9 +11,15 @@ import { Button } from "@components/Button";
 import { Flex } from "@components/Flex";
 import { HeadingSecondary } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
-import { cryptoService } from "@plugins/veilCrypto";
+import {
+    BindingRow,
+    cryptoService,
+    fetchBindingsByDiscordUid,
+    linkPubkeyToDiscord,
+    unlinkPubkeyFromDiscord
+} from "@plugins/veilCrypto";
 import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
-import { showToast, TextInput, Toasts, useEffect, useRef, useState } from "@webpack/common";
+import { showToast, TextInput, Toasts, useEffect, useRef, useState, UserStore } from "@webpack/common";
 
 const HEX64 = /^[0-9a-fA-F]{64}$/;
 
@@ -74,9 +80,9 @@ function ModeTabs({ mode, setMode, info }: { mode: Mode; setMode: (m: Mode) => v
         : (info.hasVault ? "Locked vault" : "No key");
     const tabs: Array<[Mode, string, boolean]> = [
         ["status", statusLabel, true],
-        ["paste", "Paste hex", true],
-        ["import", "Import backup", true],
-        ["generate", "Generate", true],
+        ["paste", "Paste hex", !info.hasKey],
+        ["import", "Import backup", !info.hasKey],
+        ["generate", "Generate", !info.hasKey],
         ["export", "Export backup", info.hasKey]
     ];
     return (
@@ -103,8 +109,148 @@ function PubkeyChip({ publicKey }: { publicKey: string; }) {
     );
 }
 
+function formatBindingDate(ts: number): string {
+    try {
+        return new Date(ts).toLocaleString();
+    } catch {
+        return String(ts);
+    }
+}
+
+function DiscordLinkSection({
+    publicKey,
+    discordUid,
+    bindings,
+    busy,
+    error,
+    onLink,
+    onUnlink
+}: {
+    publicKey: string;
+    discordUid: string;
+    bindings: BindingRow[];
+    busy: boolean;
+    error: string | null;
+    onLink: () => Promise<void>;
+    onUnlink: () => Promise<void>;
+}) {
+    const lowerPub = publicKey.toLowerCase();
+    const rowsForThisKey = bindings.filter(b => b.publicKey?.toLowerCase() === lowerPub);
+    const active = rowsForThisKey.find(b => b.unlinkedAt == null) ?? null;
+    const previous = rowsForThisKey.filter(b => b.unlinkedAt != null);
+
+    return (
+        <section className="vc-veil-discord-link">
+            <HeadingSecondary>Discord link</HeadingSecondary>
+            {active ? (
+                <Flex flexDirection="column" gap={6}>
+                    <Paragraph style={{ margin: 0 }}>
+                        Linked to your Discord account <strong>{discordUid}</strong> on{" "}
+                        <strong>{formatBindingDate(active.linkedAt)}</strong>.
+                    </Paragraph>
+                    <Paragraph className="vc-veil-muted" style={{ margin: 0 }}>
+                        Verifying clients can confirm your signed messages were authored by this Discord account.
+                    </Paragraph>
+                    <Flex gap={8} style={{ flexWrap: "wrap" }}>
+                        <Button variant="secondary" disabled={busy} onClick={onUnlink}>
+                            {busy ? "Working…" : "Unlink"}
+                        </Button>
+                    </Flex>
+                </Flex>
+            ) : (
+                <Flex flexDirection="column" gap={6}>
+                    <Paragraph style={{ margin: 0 }}>
+                        Link this key to your Discord account so others can verify your signed messages
+                        are really from <strong>{discordUid}</strong>. You'll be redirected to Discord to
+                        authorize the <code>identify</code> scope; nothing else is shared.
+                    </Paragraph>
+                    <Flex gap={8} style={{ flexWrap: "wrap" }}>
+                        <Button variant="primary" disabled={busy} onClick={onLink}>
+                            {busy ? "Opening Discord…" : "Link to Discord"}
+                        </Button>
+                    </Flex>
+                </Flex>
+            )}
+            {error && <Paragraph className="vc-veil-error" style={{ margin: 0 }}>{error}</Paragraph>}
+            {previous.length > 0 && (
+                <details className="vc-veil-binding-history">
+                    <summary>Previous links ({previous.length})</summary>
+                    <ul className="vc-veil-binding-history-list">
+                        {previous.map(row => (
+                            <li key={row.linkedAt}>
+                                Linked {formatBindingDate(row.linkedAt)}
+                                {row.unlinkedAt != null && ` · unlinked ${formatBindingDate(row.unlinkedAt)}`}
+                            </li>
+                        ))}
+                    </ul>
+                </details>
+            )}
+        </section>
+    );
+}
+
 function StatusPanel({ info, refresh, onClose }: { info: ActiveKeyInfo; refresh: () => Promise<void>; onClose: () => void; }) {
     const [busy, setBusy] = useState(false);
+    const [bindings, setBindings] = useState<BindingRow[]>([]);
+    const [bindingBusy, setBindingBusy] = useState(false);
+    const [bindingError, setBindingError] = useState<string | null>(null);
+
+    const discordUid: string | null = (UserStore.getCurrentUser?.() as any)?.id ?? null;
+
+    const refreshBindings = async () => {
+        if (!discordUid) { setBindings([]); return; }
+        try {
+            const result = await fetchBindingsByDiscordUid(discordUid);
+            setBindings(result?.bindings ?? []);
+        } catch {
+            setBindings([]);
+        }
+    };
+
+    useEffect(() => { void refreshBindings(); }, [discordUid, info.hasKey, info.publicKey]);
+
+    async function linkToDiscord() {
+        setBindingBusy(true);
+        setBindingError(null);
+        try {
+            const result = await linkPubkeyToDiscord();
+            if (discordUid && result.discordUid !== discordUid) {
+                // The OAuth popup opened in the OS default browser; if that
+                // browser is signed into a different Discord account than the
+                // one this Discord client is using, the binding lands under
+                // the wrong uid and the rest of the UI silently looks
+                // unlinked. Surface it loudly with the actual numeric ids.
+                setBindingError(
+                    `You authorized Discord account ${result.discordUid}, but Discord here is signed in as ${discordUid}. ` +
+                    `Sign your default browser into ${discordUid} and try again, or unlink ${result.discordUid} via that account.`
+                );
+                await refreshBindings();
+                return;
+            }
+            showToast("Linked to your Discord account.", Toasts.Type.SUCCESS);
+            await refreshBindings();
+        } catch (e: any) {
+            setBindingError(e?.message || "Couldn't link to Discord");
+        } finally {
+            setBindingBusy(false);
+        }
+    }
+
+    async function unlinkFromDiscord() {
+        if (!discordUid) return;
+        if (!confirm("Unlink this key from your Discord account? Messages signed before now will still verify, but new ones won't be tied to this account until you link again.")) return;
+        setBindingBusy(true);
+        setBindingError(null);
+        try {
+            await unlinkPubkeyFromDiscord(discordUid);
+            showToast("Unlinked.", Toasts.Type.SUCCESS);
+            await refreshBindings();
+        } catch (e: any) {
+            setBindingError(e?.message || "Couldn't unlink");
+        } finally {
+            setBindingBusy(false);
+        }
+    }
 
     async function lock() {
         setBusy(true);
@@ -172,7 +318,6 @@ function StatusPanel({ info, refresh, onClose }: { info: ActiveKeyInfo; refresh:
                     <Button variant="dangerPrimary" disabled={busy} onClick={wipe}>
                         Remove local keys
                     </Button>
-                    <Button variant="secondary" onClick={onClose}>Close</Button>
                 </Flex>
             </Flex>
         );
@@ -197,12 +342,22 @@ function StatusPanel({ info, refresh, onClose }: { info: ActiveKeyInfo; refresh:
                 Your private key lives in an encrypted local vault (AES-GCM) and stays unlocked through a 30-day
                 trusted-device lease.
             </Paragraph>
+            {info.publicKey && discordUid && (
+                <DiscordLinkSection
+                    publicKey={info.publicKey}
+                    discordUid={discordUid}
+                    bindings={bindings}
+                    busy={bindingBusy}
+                    error={bindingError}
+                    onLink={linkToDiscord}
+                    onUnlink={unlinkFromDiscord}
+                />
+            )}
             <Flex gap={8} style={{ flexWrap: "wrap" }}>
                 <Button variant="secondary" disabled={busy} onClick={lock}>Lock vault</Button>
                 <Button variant="dangerPrimary" disabled={busy} onClick={wipe}>
                     Remove local keys
                 </Button>
-                <Button variant="secondary" onClick={onClose}>Close</Button>
             </Flex>
         </Flex>
     );
@@ -421,8 +576,7 @@ function GeneratePanel({ existing, refresh }: { existing: boolean; refresh: () =
                         <Button variant="primary" onClick={() => setRevealed(null)}>Done</Button>
                     </Flex>
                     <BaseText size="sm" className="vc-veil-warning">
-                        This is the only time the private key will be shown. Use the encrypted backup flow in
-                        veil-frontend to make a recoverable copy.
+                        This is the only time the private key will be shown. Use the encrypted backup flow to make a recoverable copy.
                     </BaseText>
                 </Flex>
             ) : (
@@ -644,6 +798,12 @@ export function LinkKeyModal({ modalProps }: { modalProps: ModalProps; }) {
         }
         initialModeApplied.current = true;
     }, [info.hasKey, info.hasVault]);
+
+    useEffect(() => {
+        if (info.hasKey && (mode === "paste" || mode === "import" || mode === "generate")) {
+            setMode("status");
+        }
+    }, [info.hasKey, mode]);
 
     return (
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className="vc-veil-modal">

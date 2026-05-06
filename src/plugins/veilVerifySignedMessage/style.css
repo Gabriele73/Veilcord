@@ -40,3 +40,67 @@
 .vc-veil-sig-flair:active {
     transform: translateY(1px);
 }
+
+/*
+ * Verified variant: signature checks out AND the (Discord uid, pubkey)
+ * pair was bound at the time of signing. Use Discord's positive-status
+ * green so it reads as "trusted" without inventing new visual language.
+ */
+.vc-veil-sig-flair--verified {
+    background: var(--status-positive, #23a55a);
+    color: #fff;
+}
+
+.vc-veil-sig-flair--verified::before {
+    content: "✓";
+}
+
+/*
+ * Invalid variant: stored signature does not verify against the stored
+ * pubkey. Discord danger red, so the user can tell at a glance that a
+ * Veil signature is broken without opening the modal.
+ */
+.vc-veil-sig-flair--invalid {
+    background: var(--status-danger, #f23f43);
+    color: #fff;
+}
+
+.vc-veil-sig-flair--invalid::before {
+    content: "!";
+    font-weight: 800;
+}
+
+/*
+ * Verify modal: scope the same color tokens as linkKeyModal/signModal so
+ * nested Discord components (Paragraph, Heading, CodeBlock) never silently
+ * inherit unresolved theme variables. Per CLAUDE.md UI-contrast rule:
+ * every token has an explicit hex fallback so themes that drop the
+ * canonical Discord variables don't collapse text-on-background.
+ */
+.vc-veil-modal {
+    --veil-bg-card: var(--background-tertiary, #1e1f22);
+    --veil-bg-input: var(--input-background, #1e1f22);
+    --veil-text-strong: var(--header-primary, #f2f3f5);
+    --veil-text: var(--text-normal, #dbdee1);
+    --veil-text-muted: var(--text-muted, #949ba4);
+    --veil-border: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    --veil-danger: var(--status-danger, #f23f43);
+    --veil-positive: var(--status-positive, #23a55a);
+
+    color: var(--veil-text);
+}
+
+.vc-veil-modal h1,
+.vc-veil-modal h2,
+.vc-veil-modal h3,
+.vc-veil-modal h4,
+.vc-veil-modal h5,
+.vc-veil-modal h6 {
+    color: var(--veil-text-strong);
+}
+
+.vc-veil-modal p,
+.vc-veil-modal span,
+.vc-veil-modal label {
+    color: var(--veil-text);
+}

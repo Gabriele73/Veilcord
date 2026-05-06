@@ -17,6 +17,13 @@ export { veilApiBase } from "./settings";
 export * as VeilCryptoUtils from "./utils";
 export * as VeilEd25519 from "./ed25519";
 export * as VeilZwc from "./zwc";
+export {
+    linkPubkeyToDiscord,
+    unlinkPubkeyFromDiscord,
+    fetchBindingsByDiscordUid,
+    isBindingActiveAt
+} from "./pubkeyBinding";
+export type { BindingRow, BindingsByUid, LinkResult } from "./pubkeyBinding";
 
 export default definePlugin({
     name: "VeilCrypto",
