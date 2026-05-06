@@ -62,9 +62,18 @@ interface LookupInput {
     authorId: string | null;
 }
 
-function lookupKey({ sigRef, discordMessageId, authorId }: LookupInput): string | null {
+function fnv1a32(str: string): string {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+        hash ^= str.charCodeAt(i);
+        hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0");
+}
+
+function lookupKey({ sigRef, discordMessageId, authorId, strippedContent }: LookupInput): string | null {
     if (sigRef.v === 2) return sigRef.id ? `v2:${sigRef.id}:${authorId ?? ""}` : null;
-    if (discordMessageId) return `v3:${discordMessageId}:${authorId ?? ""}`;
+    if (discordMessageId) return `v3:${discordMessageId}:${authorId ?? ""}:${fnv1a32(strippedContent)}`;
     return null;
 }
 
@@ -186,7 +195,7 @@ const FLAIR_META: Record<FlairState, { className: string; label: string; tooltip
     }
 };
 
-export function VeilSigDecoration({ message }: { message: any; }) {
+export function VeilSigBadge({ message }: { message: any; }) {
     const ref = extractVeilSigRef(message?.content);
     if (!ref) return null;
 
@@ -251,25 +260,27 @@ export function VeilSigDecoration({ message }: { message: any; }) {
     const meta = FLAIR_META[state];
 
     return (
-        <button
-            type="button"
-            className={meta.className}
-            onClick={() =>
-                openModal(modalProps => (
-                    <VerifyModal
-                        modalProps={modalProps}
-                        sigRef={ref}
-                        discordMessageId={discordMessageId}
-                        strippedContent={strippedContent}
-                        authorTag={authorTag}
-                        timestamp={timestamp}
-                    />
-                ))
-            }
-            title={meta.tooltip}
-            aria-label={meta.tooltip}
-        >
-            {meta.label}
-        </button>
+        <div className="vc-veil-sig-accessory">
+            <button
+                type="button"
+                className={meta.className}
+                onClick={() =>
+                    openModal(modalProps => (
+                        <VerifyModal
+                            modalProps={modalProps}
+                            sigRef={ref}
+                            discordMessageId={discordMessageId}
+                            strippedContent={strippedContent}
+                            authorTag={authorTag}
+                            timestamp={timestamp}
+                        />
+                    ))
+                }
+                title={meta.tooltip}
+                aria-label={meta.tooltip}
+            >
+                {meta.label}
+            </button>
+        </div>
     );
 }

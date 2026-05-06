@@ -4,33 +4,33 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { addMessageDecoration, removeMessageDecoration } from "@api/MessageDecorations";
+import { addMessageAccessory, removeMessageAccessory } from "@api/MessageAccessories";
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 
-import { VeilSigDecoration } from "./Decoration";
+import { VeilSigBadge } from "./Decoration";
 import managedStyle from "./style.css?managed";
 
 // veil v0.0.1
 
-const DECORATION_ID = "veil-sig-decoration";
+const ACCESSORY_ID = "veil-sig-accessory";
 
 export default definePlugin({
     name: "VeilVerifySignedMessage",
-    description: "Detects Veil zero-width signature payloads in messages and shows a 'Signed' flair next to the author that opens a verification modal.",
+    description: "Detects Veil zero-width signature payloads on messages and renders a per-message verification badge that opens a details modal on click.",
     authors: [Devs.gabriele],
-    dependencies: ["MessageDecorationsAPI", "VeilCrypto"],
+    dependencies: ["MessageAccessoriesAPI", "VeilCrypto"],
     required: true,
 
     managedStyle,
 
     start() {
-        addMessageDecoration(DECORATION_ID, props => (
-            <VeilSigDecoration message={(props as any).message} />
-        ));
+        addMessageAccessory(ACCESSORY_ID, props => (
+            <VeilSigBadge message={(props as any).message} />
+        ), -1);
     },
 
     stop() {
-        removeMessageDecoration(DECORATION_ID);
+        removeMessageAccessory(ACCESSORY_ID);
     }
 });
