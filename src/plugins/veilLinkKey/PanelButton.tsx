@@ -5,9 +5,12 @@
  */
 
 import { cryptoService } from "@plugins/veilCrypto";
-import { Tooltip, useEffect, useState } from "@webpack/common";
+import { findComponentByCodeLazy } from "@webpack";
+import { useEffect, useState } from "@webpack/common";
 
 import { KeyIcon } from "./KeyIcon";
+
+const Button = findComponentByCodeLazy(".GREEN,positionKeyStemOverride:");
 
 export function PanelButton({ onClick }: { onClick: () => void; }) {
     const [hasLinkedKey, setHasLinkedKey] = useState(true);
@@ -36,23 +39,14 @@ export function PanelButton({ onClick }: { onClick: () => void; }) {
     const ariaLabel = hasLinkedKey
         ? "Manage your Veil key"
         : "Link a Veil key";
-    const className = hasLinkedKey
-        ? "vc-veil-panel-button"
-        : "vc-veil-panel-button vc-veil-needs-key";
 
     return (
-        <Tooltip text={tooltipText}>
-            {tooltipProps => (
-                <button
-                    {...tooltipProps}
-                    type="button"
-                    className={className}
-                    onClick={onClick}
-                    aria-label={ariaLabel}
-                >
-                    <KeyIcon width={18} height={18} />
-                </button>
-            )}
-        </Tooltip>
+        <Button
+            tooltipText={tooltipText}
+            icon={() => <KeyIcon width={20} height={20} color={hasLinkedKey ? "currentColor" : "var(--status-danger)"} />}
+            redGlow={!hasLinkedKey}
+            aria-label={ariaLabel}
+            onClick={onClick}
+        />
     );
 }
