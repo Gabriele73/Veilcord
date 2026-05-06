@@ -7,16 +7,22 @@
 import { VeilZwc } from "@plugins/veilCrypto";
 
 export interface VeilSigRef {
-    id: string;
     v: number;
+    /** v2 backend lookup id. Absent for v3+. */
+    id?: string;
 }
 
 export function extractVeilSigRef(content: unknown): VeilSigRef | null {
     if (typeof content !== "string" || !content) return null;
-    const decoded = VeilZwc.decodeId(content);
+    const decoded = VeilZwc.decodeRef(content);
     if (!decoded) return null;
     return {
-        id: decoded.id.toLowerCase(),
-        v: decoded.v
+        v: decoded.v,
+        id: decoded.id?.toLowerCase()
     };
+}
+
+export function stripZwc(content: string): string {
+    const decoded = VeilZwc.decodeRef(content);
+    return decoded ? decoded.message : content;
 }

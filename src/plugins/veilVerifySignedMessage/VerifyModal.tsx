@@ -37,8 +37,10 @@ const STATUS_LABEL: Record<Status, string> = {
 };
 
 interface FetchedRecord {
-    id: string;
-    message: string;
+    id: string | null;
+    discordMessageId: string | null;
+    /** Server-stored body — only present for v2 legacy records. v3 relies on the live Discord body. */
+    storedMessage: string | null;
     publicKey: string;
     signature: string;
     v: number;
@@ -48,34 +50,37 @@ interface FetchedRecord {
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX128 = /^[0-9a-f]{128}$/;
-const HEX16 = /^[0-9a-f]{16}$/;
 
 function normalizeRecord(raw: any): FetchedRecord | null {
     if (!raw || typeof raw !== "object") return null;
     const id = typeof raw.id === "string" ? raw.id.toLowerCase() : null;
-    const message = typeof raw.message === "string" ? raw.message : null;
+    const discordMessageId = typeof raw.discordMessageId === "string" ? raw.discordMessageId : null;
+    const storedMessage = typeof raw.message === "string" ? raw.message : null;
     const publicKey = typeof raw.publicKey === "string" ? raw.publicKey.toLowerCase() : null;
     const signature = typeof raw.signature === "string" ? raw.signature.toLowerCase() : null;
     const v = typeof raw.v === "number" ? raw.v : null;
     const submitterPubkey = typeof raw.submitterPubkey === "string" ? raw.submitterPubkey.toLowerCase() : "";
     const createdAt = typeof raw.createdAt === "number" ? raw.createdAt : 0;
 
-    if (!id || !HEX16.test(id)) return null;
     if (!publicKey || !HEX64.test(publicKey)) return null;
     if (!signature || !HEX128.test(signature)) return null;
-    if (message == null || v == null) return null;
+    if (v == null) return null;
 
-    return { id, message, publicKey, signature, v, submitterPubkey, createdAt };
+    return { id, discordMessageId, storedMessage, publicKey, signature, v, submitterPubkey, createdAt };
 }
 
 export function VerifyModal({
     modalProps,
     sigRef,
+    discordMessageId,
+    strippedContent,
     authorTag,
     timestamp
 }: {
     modalProps: ModalProps;
     sigRef: VeilSigRef;
+    discordMessageId: string | null;
+    strippedContent: string;
     authorTag?: string;
     timestamp?: string;
 }) {
@@ -88,10 +93,18 @@ export function VerifyModal({
         let cancelled = false;
         (async () => {
             try {
-                const res = await fetch(`${veilApiBase()}/veilcord/signed-message/${encodeURIComponent(sigRef.id)}`, {
-                    method: "GET",
-                    headers: { Accept: "application/json" }
-                });
+                let url: string;
+                if (sigRef.v === 2 && sigRef.id) {
+                    url = `${veilApiBase()}/veilcord/signed-message/${encodeURIComponent(sigRef.id)}`;
+                } else if (discordMessageId) {
+                    url = `${veilApiBase()}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
+                } else {
+                    setStatus("error");
+                    setErrorMsg("No lookup key for this signature.");
+                    return;
+                }
+
+                const res = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
                 if (cancelled) return;
 
                 if (res.status === 404) {
@@ -117,8 +130,10 @@ export function VerifyModal({
                 setRecord(normalized);
                 setStatus("verifying");
 
+                const signedBody = normalized.storedMessage ?? strippedContent;
+
                 try {
-                    const ok = await cryptoService.verify(normalized.message, normalized.signature, normalized.publicKey);
+                    const ok = await cryptoService.verify(signedBody, normalized.signature, normalized.publicKey);
                     if (cancelled) return;
                     setStatus(ok ? "valid" : "invalid");
                 } catch (e: any) {
@@ -133,14 +148,14 @@ export function VerifyModal({
             }
         })();
         return () => { cancelled = true; };
-    }, [sigRef.id]);
+    }, [sigRef.v, sigRef.id, discordMessageId, strippedContent]);
 
     const copy = (label: string, value: string) => {
         navigator.clipboard.writeText(value).then(() => {
             setCopyHint(`${label} copied`);
             setTimeout(() => setCopyHint(null), 1500);
         }).catch(() => {
-            setCopyHint(`Failed to copy ${label.toLowerCase()}`);
+            setCopyHint(`Couldn't copy ${label.toLowerCase()}.`);
             setTimeout(() => setCopyHint(null), 1500);
         });
     };
@@ -155,6 +170,8 @@ export function VerifyModal({
             try { return new Date(record.createdAt).toLocaleString(); } catch { return String(record.createdAt); }
         })()
         : null;
+
+    const displayedBody = record?.storedMessage ?? strippedContent;
 
     return (
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className="vc-veil-modal">
@@ -177,7 +194,7 @@ export function VerifyModal({
                                 <HeadingTertiary>Message</HeadingTertiary>
                                 <Card defaultPadding>
                                     <Paragraph style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                        {record.message}
+                                        {displayedBody}
                                     </Paragraph>
                                 </Card>
                             </section>
@@ -236,18 +253,12 @@ export function VerifyModal({
                                             <strong>Recorded:</strong> {recordedAt}
                                         </Paragraph>
                                     )}
-                                    <Paragraph style={{ margin: 0 }}>
-                                        <strong>Signed-id:</strong>{" "}
-                                        <code>{record.id}</code>
-                                        <Button
-                                            variant="secondary"
-                                            size="small"
-                                            onClick={() => copy("Signed-id", record.id)}
-                                            style={{ marginLeft: 8 }}
-                                        >
-                                            Copy
-                                        </Button>
-                                    </Paragraph>
+                                    {record.discordMessageId && (
+                                        <Paragraph style={{ margin: 0 }}>
+                                            <strong>Discord message id:</strong>{" "}
+                                            <code>{record.discordMessageId}</code>
+                                        </Paragraph>
+                                    )}
                                     <Paragraph style={{ margin: 0 }}>
                                         <strong>Payload version:</strong> {String(record.v)}
                                     </Paragraph>
