@@ -5,7 +5,7 @@
  */
 
 import { cryptoService } from "@plugins/veilCrypto";
-import { useEffect, useState } from "@webpack/common";
+import { Tooltip, useEffect, useState } from "@webpack/common";
 
 import { KeyIcon } from "./KeyIcon";
 
@@ -41,16 +41,18 @@ export function PanelButton({ onClick }: { onClick: () => void; }) {
         : "vc-veil-panel-button vc-veil-needs-key";
 
     return (
-        <button
-            type="button"
-            className={className}
-            onClick={onClick}
-            aria-label={ariaLabel}
-        >
-            <KeyIcon width={18} height={18} />
-            <span className="vc-veil-panel-tooltip" role="tooltip">
-                {tooltipText}
-            </span>
-        </button>
+        <Tooltip text={tooltipText}>
+            {tooltipProps => (
+                <button
+                    {...tooltipProps}
+                    type="button"
+                    className={className}
+                    onClick={onClick}
+                    aria-label={ariaLabel}
+                >
+                    <KeyIcon width={18} height={18} />
+                </button>
+            )}
+        </Tooltip>
     );
 }
