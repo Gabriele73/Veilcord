@@ -20,7 +20,10 @@ const BUTTON_ID = "veil-sign";
 let lastEnabled = false;
 
 interface Pending {
-    content: string;
+    /** Final Discord content (signed body + ZWC marker) — used to match the MESSAGE_CREATE event. */
+    matchContent: string;
+    /** Body the signature was computed over (no ZWC trailer). */
+    signedBody: string;
     publicKey: string;
     signature: string;
     expiresAt: number;
@@ -43,7 +46,7 @@ function takeMatchingPending(channelId: string, content: string): Pending | null
     for (let i = 0; i < queue.length; i++) {
         const entry = queue[i];
         if (entry.expiresAt <= now) continue;
-        if (entry.content === content) {
+        if (entry.matchContent === content) {
             queue.splice(i, 1);
             if (queue.length === 0) pendingByChannel.delete(channelId);
             return entry;
@@ -52,9 +55,9 @@ function takeMatchingPending(channelId: string, content: string): Pending | null
     return null;
 }
 
-async function registerOnBackend(discordMessageId: string, content: string, publicKey: string, signature: string) {
+async function registerOnBackend(discordMessageId: string, signedBody: string, publicKey: string, signature: string) {
     const body = {
-        message: content,
+        message: signedBody,
         discordMessageId,
         publicKey,
         signature,
@@ -100,7 +103,7 @@ function onMessageCreate(event: any) {
     const pending = takeMatchingPending(channelId, message.content);
     if (!pending) return;
 
-    void registerOnBackend(message.id, pending.content, pending.publicKey, pending.signature)
+    void registerOnBackend(message.id, pending.signedBody, pending.publicKey, pending.signature)
         .catch(err => {
             showToast(`Veil: couldn't register signature (${err?.message || err}).`, Toasts.Type.FAILURE);
         });
@@ -130,7 +133,8 @@ const sendListener: MessageSendListener = async (channelId, messageObj) => {
         messageObj.content = finalContent;
 
         pushPending(channelId, {
-            content: finalContent,
+            matchContent: finalContent,
+            signedBody: signedContent,
             publicKey,
             signature,
             expiresAt: Date.now() + PENDING_TTL_MS
