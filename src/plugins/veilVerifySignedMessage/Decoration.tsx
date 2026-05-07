@@ -6,7 +6,7 @@
 
 import { cryptoService, isBindingActiveAt, veilApiBase } from "@plugins/veilCrypto";
 import { openModal } from "@utils/modal";
-import { useEffect, useState } from "@webpack/common";
+import { ReactDOM, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
 
 import { extractVeilSigRef, stripZwc, VeilSigRef } from "./parser";
 import { VerifyModal } from "./VerifyModal";
@@ -169,31 +169,63 @@ async function computeFlairState(
 
 const FLAIR_META: Record<FlairState, { className: string; label: string; tooltip: string; }> = {
     loading: {
-        className: "vc-veil-sig-flair vc-veil-sig-flair--loading",
-        label: "Checking…",
-        tooltip: "Fetching the Veil signature record."
+        className: "vc-veil-sig-dot vc-veil-sig-dot--loading",
+        label: "Checking",
+        tooltip: "Checking Veil signature."
     },
     verified: {
-        className: "vc-veil-sig-flair vc-veil-sig-flair--verified",
+        className: "vc-veil-sig-dot vc-veil-sig-dot--verified",
         label: "Verified",
-        tooltip: "Signed by this Discord account's linked Veil key. Click for details."
+        tooltip: "Verified. Signed by this account's linked Veil key. Click for details."
     },
     signed: {
-        className: "vc-veil-sig-flair",
+        className: "vc-veil-sig-dot vc-veil-sig-dot--signed",
         label: "Signed",
         tooltip: "Signature is valid, but this Veil key isn't linked to this Discord account. Click for details."
     },
     invalid: {
-        className: "vc-veil-sig-flair vc-veil-sig-flair--invalid",
+        className: "vc-veil-sig-dot vc-veil-sig-dot--invalid",
         label: "Invalid",
         tooltip: "Signature does not verify. Click for details."
     },
     unverified: {
-        className: "vc-veil-sig-flair vc-veil-sig-flair--unverified",
+        className: "vc-veil-sig-dot vc-veil-sig-dot--unverified",
         label: "Unverified",
         tooltip: "No Veil signature record was found for this message. Click for details."
     }
 };
+
+function StateGlyph({ state }: { state: FlairState; }) {
+    if (state === "verified" || state === "signed") {
+        return (
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M2.7 6.3l2.3 2.3 4.5-4.9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+        );
+    }
+    if (state === "invalid") {
+        return (
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M3.2 3.2l5.6 5.6M8.8 3.2l-5.6 5.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+        );
+    }
+    if (state === "unverified") {
+        return (
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M4.2 4.6c0-1.1.9-1.8 1.9-1.8s1.8.7 1.8 1.7c0 1.6-1.8 1.5-1.8 2.7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                <circle cx="6.05" cy="9" r="0.7" fill="currentColor" />
+            </svg>
+        );
+    }
+    return (
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+            <circle cx="3" cy="6" r="1" fill="currentColor" />
+            <circle cx="6" cy="6" r="1" fill="currentColor" />
+            <circle cx="9" cy="6" r="1" fill="currentColor" />
+        </svg>
+    );
+}
 
 export function VeilSigBadge({ message }: { message: any; }) {
     const ref = extractVeilSigRef(message?.content);
@@ -259,28 +291,100 @@ export function VeilSigBadge({ message }: { message: any; }) {
 
     const meta = FLAIR_META[state];
 
-    return (
-        <div className="vc-veil-sig-accessory">
-            <button
-                type="button"
-                className={meta.className}
-                onClick={() =>
-                    openModal(modalProps => (
-                        <VerifyModal
-                            modalProps={modalProps}
-                            sigRef={ref}
-                            discordMessageId={discordMessageId}
-                            strippedContent={strippedContent}
-                            authorTag={authorTag}
-                            timestamp={timestamp}
-                        />
-                    ))
+    /*
+     * Portal the badge inline at the end of the message content (the
+     * `[id^="message-content-"]` div Discord renders the markdown into),
+     * so it flows after the message text the way the native "(edited)"
+     * marker does. This avoids the previous overlay approach taking up a
+     * full line on multi-line messages, and the badge naturally follows
+     * the last word of the message wherever it ends.
+     *
+     * Discord re-renders message-content from scratch on edits and on a
+     * handful of other interactions, which wipes any imperatively-added
+     * children (including our portal host span). A MutationObserver on
+     * the message <li> lets us detect that and re-attach the host so the
+     * badge survives edits, reactions, embed loads, etc.
+     */
+    const anchorRef = useRef<HTMLSpanElement | null>(null);
+    const [overlayHost, setOverlayHost] = useState<HTMLElement | null>(null);
+
+    useLayoutEffect(() => {
+        const anchor = anchorRef.current;
+        if (!anchor) return;
+
+        const li = anchor.closest("li[id^=\"chat-messages-\"]") as HTMLElement | null;
+        if (!li) return;
+
+        let attached: HTMLElement | null = null;
+
+        const ensureHost = () => {
+            const content = li.querySelector("[id^=\"message-content-\"]") as HTMLElement | null;
+            if (!content) {
+                if (attached) {
+                    attached = null;
+                    setOverlayHost(null);
                 }
-                title={meta.tooltip}
-                aria-label={meta.tooltip}
-            >
-                {meta.label}
-            </button>
-        </div>
+                return;
+            }
+            let host = content.querySelector(":scope > .vc-veil-sig-overlay") as HTMLElement | null;
+            if (!host || !host.isConnected) {
+                host = document.createElement("span");
+                host.className = "vc-veil-sig-overlay";
+                content.appendChild(host);
+            } else if (host.parentElement !== content) {
+                content.appendChild(host);
+            }
+            if (attached !== host) {
+                attached = host;
+                setOverlayHost(host);
+            }
+        };
+
+        ensureHost();
+
+        const observer = new MutationObserver(() => {
+            // Cheap guard: only re-run if our host actually went away or
+            // a different message-content node now lives under the <li>.
+            if (!attached || !attached.isConnected || attached.parentElement?.id?.startsWith("message-content-") !== true) {
+                ensureHost();
+            }
+        });
+        observer.observe(li, { childList: true, subtree: true });
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [discordMessageId]);
+
+    const badge = (
+        <button
+            type="button"
+            className={meta.className}
+            onClick={() =>
+                openModal(modalProps => (
+                    <VerifyModal
+                        modalProps={modalProps}
+                        sigRef={ref}
+                        discordMessageId={discordMessageId}
+                        strippedContent={strippedContent}
+                        authorTag={authorTag}
+                        timestamp={timestamp}
+                    />
+                ))
+            }
+            title={meta.tooltip}
+            aria-label={meta.tooltip}
+            data-state={state}
+        >
+            <StateGlyph state={state} />
+            <span className="vc-veil-sig-dot__label">{meta.label}</span>
+        </button>
+    );
+
+    return (
+        <>
+            <span ref={anchorRef} className="vc-veil-sig-anchor" aria-hidden="true" />
+            {overlayHost && ReactDOM.createPortal(badge, overlayHost)}
+        </>
     );
 }

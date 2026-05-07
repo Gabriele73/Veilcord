@@ -1,0 +1,158 @@
+/*
+ * Veil — linked-pubkeys section in the user profile popout. Theme tokens
+ * pair with explicit hex fallbacks per the CLAUDE.md UI-contrast rule so
+ * text and icon strokes never collapse against the popout background on
+ * builds that drop the canonical Discord variables.
+ */
+
+.vc-veil-pkp-section {
+    --veil-pkp-bg: var(--background-secondary, #2b2d31);
+    --veil-pkp-border: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    --veil-pkp-text: var(--text-normal, #dbdee1);
+    --veil-pkp-text-strong: var(--header-primary, #f2f3f5);
+    --veil-pkp-text-muted: var(--text-muted, #949ba4);
+    --veil-pkp-accent: var(--brand-500, #5865f2);
+
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--veil-pkp-bg);
+    border: 1px solid var(--veil-pkp-border);
+    color: var(--veil-pkp-text);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.vc-veil-pkp-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    color: var(--veil-pkp-text-strong);
+}
+
+.vc-veil-pkp-glyph {
+    color: var(--veil-pkp-accent, #5865f2);
+    flex-shrink: 0;
+}
+
+.vc-veil-pkp-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--veil-pkp-text-strong);
+}
+
+.vc-veil-pkp-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.vc-veil-pkp-body--loading,
+.vc-veil-pkp-body--empty {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    color: var(--veil-pkp-text-muted);
+    font-size: 12px;
+}
+
+.vc-veil-pkp-body--loading .vc-veil-pkp-glyph,
+.vc-veil-pkp-body--empty .vc-veil-pkp-glyph {
+    color: var(--veil-pkp-text-muted);
+}
+
+.vc-veil-pkp-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.vc-veil-pkp-list--history {
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--veil-pkp-border);
+}
+
+.vc-veil-pkp-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.vc-veil-pkp-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--background-tertiary, #1e1f22);
+    border: 1px solid var(--veil-pkp-border);
+    color: var(--veil-pkp-text-strong);
+    font-family: var(--font-code, monospace);
+    font-size: 11.5px;
+    line-height: 1.2;
+    cursor: pointer;
+    user-select: text;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.vc-veil-pkp-chip:hover {
+    background: var(--background-modifier-hover, rgba(78, 80, 88, 0.25));
+    border-color: rgba(88, 101, 242, 0.55);
+    color: var(--veil-pkp-text-strong);
+}
+
+.vc-veil-pkp-chip:focus-visible {
+    outline: 2px solid var(--veil-pkp-accent, #5865f2);
+    outline-offset: 2px;
+}
+
+.vc-veil-pkp-row--previous .vc-veil-pkp-chip {
+    opacity: 0.78;
+}
+
+.vc-veil-pkp-meta {
+    color: var(--veil-pkp-text-muted);
+    font-size: 11.5px;
+    flex-shrink: 0;
+}
+
+.vc-veil-pkp-row--active .vc-veil-pkp-meta::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--status-positive, #23a55a);
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+.vc-veil-pkp-history-toggle {
+    align-self: flex-start;
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--veil-pkp-text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: color 120ms ease;
+}
+
+.vc-veil-pkp-history-toggle:hover {
+    color: var(--veil-pkp-text-strong);
+    text-decoration: underline;
+}
+
+.vc-veil-pkp-muted {
+    color: var(--veil-pkp-text-muted);
+    font-size: 12px;
+}

@@ -1,112 +1,181 @@
 /*
- * Flair styles for the Veil "Signed" pill rendered next to the author via
- * the MessageDecorations API. The visible message body is plain text (the
- * signature is encoded in trailing zero-width characters) so it renders
- * natively without any extra wrapping.
+ * Per-message Veil verification indicator. The plugin tracks lifecycle
+ * via the MessageAccessories API but portals the visible badge inline
+ * at the end of the message content div (`[id^="message-content-"]`)
+ * so it flows after the text like Discord's own "(edited)" marker,
+ * never taking a full line of its own.
+ *
+ * Default state: a small icon-only circle, slightly faded. Hovering the
+ * message expands it into a full pill with the text label, mirroring
+ * how Discord reveals its hover-only chrome (timestamps in compact
+ * mode, the message toolbar). The icon is absolutely positioned within
+ * the badge so its on-screen position is purely a function of the
+ * badge's own left edge — width / padding / label transitions on the
+ * button cannot move it, so the checkmark does not wobble in either
+ * direction during the animation.
+ *
+ * Theme tokens pair with explicit hex fallbacks per the CLAUDE.md
+ * UI-contrast rule so the badge stays readable on themes that drop the
+ * canonical Discord variables.
  */
 
-.vc-veil-sig-flair {
+.vc-veil-sig-anchor {
+    display: none !important;
+}
+
+.vc-veil-sig-overlay {
+    display: inline;
+}
+
+.vc-veil-sig-dot {
+    --veil-dot-bg: rgba(255, 255, 255, 0.06);
+    --veil-dot-border: rgba(255, 255, 255, 0.14);
+    --veil-dot-fg: var(--text-muted, #949ba4);
+
+    /*
+     * `position: relative` plus an absolutely-positioned child icon is
+     * what eliminates the wobble: the icon's left edge is pinned to the
+     * badge box at a constant `left: 3px`, so width / padding / label
+     * transitions on the button can't shift it left or right.
+     */
+    position: relative;
     display: inline-flex;
     align-items: center;
-    height: 0.9375rem;
-    padding: 0 0.375rem;
-    border: none;
-    border-radius: 0.1875rem;
-    background: #5865f2;
-    color: #fff;
+    box-sizing: border-box;
+    vertical-align: middle;
+    margin: 0 0 0 6px;
+
+    height: 18px;
+    width: 18px;
+    padding: 0;
+
+    border: 1px solid var(--veil-dot-border);
+    border-radius: 999px;
+    background: var(--veil-dot-bg);
+    color: var(--veil-dot-fg);
+
+    overflow: hidden;
+    cursor: pointer;
+    opacity: 0.7;
+    font-family: var(--font-display);
+
+    transition:
+        width 180ms ease,
+        padding-right 180ms ease,
+        opacity 120ms ease,
+        background 120ms ease,
+        border-color 120ms ease;
+}
+
+.vc-veil-sig-dot svg {
+    /* Absolute, vertically centered, fixed left offset — the icon never
+     * moves while the rest of the badge animates around it. */
+    position: absolute;
+    left: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 11px;
+    height: 11px;
+    display: block;
+    pointer-events: none;
+    flex-shrink: 0;
+}
+
+/*
+ * The label is the only thing that grows on hover. `min-width: 0` is
+ * load-bearing so flex actually shrinks it back to zero on collapse;
+ * `margin-left: 18px` reserves the icon's space (3px offset + 11px icon
+ * + ~4px gap) so the label's text never overlaps the absolutely-
+ * positioned icon as the badge expands.
+ */
+.vc-veil-sig-dot__label {
+    min-width: 0;
+    max-width: 0;
+    margin-left: 18px;
+    opacity: 0;
+    white-space: nowrap;
+    overflow: hidden;
     font-size: 0.625rem;
     font-weight: 700;
-    text-transform: uppercase;
     letter-spacing: 0.04em;
+    text-transform: uppercase;
     line-height: 1;
-    cursor: pointer;
-    vertical-align: middle;
-    transition: filter 120ms ease, transform 120ms ease;
-    font-family: var(--font-display);
+    color: inherit;
+    transition:
+        max-width 180ms ease,
+        opacity 140ms ease;
 }
 
 /*
- * Accessory wrapper: the badge renders in the per-message accessories slot
- * (where embeds and link previews live) so every signed message in a stack
- * gets its own indicator, not just the first under the author header.
+ * Expansion is triggered ONLY by hovering the message itself, not by
+ * hovering the badge directly, so a stray cursor passing over the
+ * indicator dot does not pop it open.
  */
-.vc-veil-sig-accessory {
-    display: flex;
-    margin-top: 2px;
+li[id^="chat-messages-"]:hover .vc-veil-sig-dot {
+    width: auto;
+    padding-right: 8px;
+    opacity: 1;
 }
 
-.vc-veil-sig-flair::before {
-    content: "✓";
-    margin-right: 0.25rem;
-    font-size: 0.7rem;
-    line-height: 1;
+li[id^="chat-messages-"]:hover .vc-veil-sig-dot__label {
+    max-width: 120px;
+    opacity: 1;
 }
 
-.vc-veil-sig-flair:hover {
-    filter: brightness(1.12);
+/* Keyboard accessibility: focusing the badge expands it via the
+ * focus ring even without a message hover. */
+.vc-veil-sig-dot:focus-visible {
+    outline: 2px solid var(--brand-500, #5865f2);
+    outline-offset: 2px;
+    width: auto;
+    padding-right: 8px;
+    opacity: 1;
 }
 
-.vc-veil-sig-flair:active {
-    transform: translateY(1px);
+.vc-veil-sig-dot:focus-visible .vc-veil-sig-dot__label {
+    max-width: 120px;
+    opacity: 1;
 }
 
-/*
- * Verified variant: signature checks out AND the (Discord uid, pubkey)
- * pair was bound at the time of signing. Use Discord's positive-status
- * green so it reads as "trusted" without inventing new visual language.
- */
-.vc-veil-sig-flair--verified {
-    background: var(--status-positive, #23a55a);
-    color: #fff;
+.vc-veil-sig-dot:active {
+    transform: scale(0.96);
 }
 
-.vc-veil-sig-flair--verified::before {
-    content: "✓";
+.vc-veil-sig-dot--verified {
+    --veil-dot-bg: rgba(35, 165, 90, 0.18);
+    --veil-dot-border: rgba(35, 165, 90, 0.55);
+    --veil-dot-fg: var(--status-positive, #23a55a);
 }
 
-/*
- * Invalid variant: stored signature does not verify against the stored
- * pubkey. Discord danger red, so the user can tell at a glance that a
- * Veil signature is broken without opening the modal.
- */
-.vc-veil-sig-flair--invalid {
-    background: var(--status-danger, #f23f43);
-    color: #fff;
+.vc-veil-sig-dot--signed {
+    --veil-dot-bg: rgba(88, 101, 242, 0.18);
+    --veil-dot-border: rgba(88, 101, 242, 0.55);
+    --veil-dot-fg: #8a95ff;
 }
 
-.vc-veil-sig-flair--invalid::before {
-    content: "!";
-    font-weight: 800;
+.vc-veil-sig-dot--invalid {
+    --veil-dot-bg: rgba(242, 63, 67, 0.20);
+    --veil-dot-border: rgba(242, 63, 67, 0.60);
+    --veil-dot-fg: var(--status-danger, #f23f43);
+    opacity: 1;
 }
 
-/*
- * Loading variant: backend record not yet fetched (or retrying because the
- * sender's POST may still be in flight). Muted so it doesn't claim authority
- * the message hasn't earned.
- */
-.vc-veil-sig-flair--loading {
-    background: var(--background-modifier-accent, rgba(255, 255, 255, 0.12));
-    color: var(--text-muted, #949ba4);
+.vc-veil-sig-dot--unverified {
+    --veil-dot-bg: rgba(240, 178, 50, 0.20);
+    --veil-dot-border: rgba(240, 178, 50, 0.55);
+    --veil-dot-fg: var(--status-warning, #f0b232);
 }
 
-.vc-veil-sig-flair--loading::before {
-    content: "…";
-    font-weight: 800;
+.vc-veil-sig-dot--loading {
+    --veil-dot-bg: rgba(255, 255, 255, 0.06);
+    --veil-dot-border: rgba(255, 255, 255, 0.18);
+    --veil-dot-fg: var(--text-muted, #949ba4);
+    animation: vc-veil-sig-dot-pulse 1.4s ease-in-out infinite;
 }
 
-/*
- * Unverified variant: every retry exhausted with no record. Could be a fake
- * marker, could be a registration that never landed. Yellow-ish so it reads
- * as "be careful" without false-positive-ing into red `invalid`.
- */
-.vc-veil-sig-flair--unverified {
-    background: var(--status-warning, #f0b232);
-    color: #1e1f22;
-}
-
-.vc-veil-sig-flair--unverified::before {
-    content: "?";
-    font-weight: 800;
+@keyframes vc-veil-sig-dot-pulse {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 0.95; }
 }
 
 /*
