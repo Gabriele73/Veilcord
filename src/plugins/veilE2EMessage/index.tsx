@@ -55,6 +55,26 @@ function isEnabled(channelId: string): boolean {
 }
 
 /*
+ * Sign mode and E2E mode are mutually exclusive: signing wraps the
+ * plaintext in a backend record keyed by Discord message id, while
+ * E2E replaces the body with an opaque envelope that has no plaintext
+ * for the backend to sign over. Letting both run on the same message
+ * just produces a noisy invalid-signature trail. We sync state via
+ * window events so neither plugin has to import the other.
+ */
+const MODE_SIGN_ON_EVENT = "veil-mode:sign-on";
+const MODE_E2E_ON_EVENT = "veil-mode:e2e-on";
+
+function broadcastE2eOn() {
+    try { window.dispatchEvent(new CustomEvent(MODE_E2E_ON_EVENT)); } catch { /* ignore */ }
+}
+
+function disableAllE2eChannels() {
+    const channelIds = Array.from(enabledByChannel.keys());
+    for (const cid of channelIds) setEnabled(cid, false);
+}
+
+/*
  * Side cache populated by the synchronous patch hook so the async
  * decrypt task can find the original envelope after the Flux store has
  * already overwritten `message.content` with our placeholder.
@@ -402,10 +422,13 @@ function applyCachedAttachmentsInPlace(message: any, messageId: string, cached: 
             id: `veil_${messageId}_${i}`,
             filename: a.name,
             size: a.size,
-            // The "#" suffix turns Discord's appended `?format=webp&width=…&height=…`
-            // query into a fragment, so the browser still resolves the same blob URL.
-            // Without this, the rendered <img src> becomes a 404.
-            url: a.blobUrl + "#",
+            // `proxy_url` is what Discord runs through its image resizer
+            // and appends `?format=webp&width=…&height=…` to. The "#"
+            // turns that query into a fragment so the blob URL still
+            // resolves. `url` is what `<a href download>`, "open
+            // original", and Electron's downloader use as-is — leave
+            // it clean so saving the file actually works.
+            url: a.blobUrl,
             proxy_url: a.blobUrl + "#",
             content_type: a.mime,
             spoiler: a.spoiler,
@@ -595,10 +618,10 @@ async function decryptAndCommit(messageId: string): Promise<void> {
                 id: `veil_${messageId}_${i}`,
                 filename: meta.name,
                 size: meta.size,
-                // See applyCachedAttachmentsInPlace: "#" is what keeps
-                // Discord's `?format=webp&width=…&height=…` from
-                // breaking the blob URL.
-                url: blobUrl + "#",
+                // See applyCachedAttachmentsInPlace: `proxy_url` carries
+                // the "#" so Discord's appended format query becomes a
+                // fragment; `url` stays clean so downloads work.
+                url: blobUrl,
                 proxy_url: blobUrl + "#",
                 content_type: meta.mime,
                 spoiler: !!meta.spoiler,
@@ -774,9 +797,10 @@ function buildDecryptedAttachmentList(
         id: `veil_${messageId}_${i}`,
         filename: cached[i].name,
         size: cached[i].size,
-        // "#" so Discord's `?format=webp&width=…&height=…` resize-query
-        // becomes a fragment and doesn't break the blob URL.
-        url: cached[i].blobUrl + "#",
+        // `proxy_url` carries the "#" to absorb Discord's appended
+        // `?format=webp&width=…&height=…` thumbnail query. `url` stays
+        // clean so downloads and "open original" work.
+        url: cached[i].blobUrl,
         proxy_url: cached[i].blobUrl + "#",
         content_type: cached[i].mime,
         spoiler: cached[i].spoiler,
@@ -857,6 +881,7 @@ const VeilE2EButton: ChatBarButtonFactory = ({ channel, isMainChat }) => {
                 const next = !enabled;
                 setEnabled(channel.id, next);
                 setEnabledLocal(next);
+                if (next) broadcastE2eOn();
             }}
             buttonProps={{ "aria-pressed": enabled } as any}
         >
@@ -951,6 +976,7 @@ export default definePlugin({
         FluxDispatcher.subscribe("MESSAGE_DELETE", onMessageDelete);
         FluxDispatcher.subscribe("MESSAGE_DELETE_BULK", onMessageDelete);
         window.addEventListener("veilcrypto:state-change", onVaultStateChange);
+        window.addEventListener(MODE_SIGN_ON_EVENT, disableAllE2eChannels);
     },
 
     stop() {
@@ -964,6 +990,7 @@ export default definePlugin({
         FluxDispatcher.unsubscribe("MESSAGE_DELETE", onMessageDelete);
         FluxDispatcher.unsubscribe("MESSAGE_DELETE_BULK", onMessageDelete);
         window.removeEventListener("veilcrypto:state-change", onVaultStateChange);
+        window.removeEventListener(MODE_SIGN_ON_EVENT, disableAllE2eChannels);
         enabledByChannel.clear();
         pendingByMessageId.clear();
         recentSendsByEnvelopeB64.clear();

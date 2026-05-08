@@ -215,12 +215,44 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
     }
 };
 
+/*
+ * Sign mode and E2E mode are mutually exclusive: signing wraps the
+ * plaintext in a backend record keyed by the Discord message id, while
+ * E2E replaces the body with an opaque envelope the backend can't sign
+ * over. Letting both fire on the same message just produces a noisy
+ * invalid-signature trail. We sync state via window events so neither
+ * plugin has to import the other.
+ */
+const MODE_SIGN_ON_EVENT = "veil-mode:sign-on";
+const MODE_E2E_ON_EVENT = "veil-mode:e2e-on";
+const SIGN_LOCAL_TOGGLE_EVENT = "veil-sign:toggle";
+
+function broadcastSignOn() {
+    try { window.dispatchEvent(new CustomEvent(MODE_SIGN_ON_EVENT)); } catch { /* ignore */ }
+}
+
+function disableSignMode() {
+    if (!lastEnabled) return;
+    lastEnabled = false;
+    try { window.dispatchEvent(new CustomEvent(SIGN_LOCAL_TOGGLE_EVENT, { detail: { enabled: false } })); } catch { /* ignore */ }
+}
+
 const VeilSignButton: ChatBarButtonFactory = ({ isMainChat }) => {
     const [enabled, setEnabled] = useState(lastEnabled);
 
     useEffect(() => {
         lastEnabled = enabled;
     }, [enabled]);
+
+    useEffect(() => {
+        const onLocalToggle = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (!detail || typeof detail.enabled !== "boolean") return;
+            setEnabled(detail.enabled);
+        };
+        window.addEventListener(SIGN_LOCAL_TOGGLE_EVENT, onLocalToggle as EventListener);
+        return () => window.removeEventListener(SIGN_LOCAL_TOGGLE_EVENT, onLocalToggle as EventListener);
+    }, []);
 
     if (!isMainChat) return null;
 
@@ -231,7 +263,13 @@ const VeilSignButton: ChatBarButtonFactory = ({ isMainChat }) => {
     return (
         <ChatBarButton
             tooltip={tooltip}
-            onClick={() => setEnabled(prev => !prev)}
+            onClick={() => {
+                setEnabled(prev => {
+                    const next = !prev;
+                    if (next) broadcastSignOn();
+                    return next;
+                });
+            }}
             buttonProps={{ "aria-pressed": enabled } as any}
         >
             <span
@@ -259,12 +297,14 @@ export default definePlugin({
         addChatBarButton(BUTTON_ID, VeilSignButton, SignIcon);
         addMessagePreSendListener(sendListener);
         FluxDispatcher.subscribe("MESSAGE_CREATE", onMessageCreate);
+        window.addEventListener(MODE_E2E_ON_EVENT, disableSignMode);
     },
 
     stop() {
         removeChatBarButton(BUTTON_ID);
         removeMessagePreSendListener(sendListener);
         FluxDispatcher.unsubscribe("MESSAGE_CREATE", onMessageCreate);
+        window.removeEventListener(MODE_E2E_ON_EVENT, disableSignMode);
         pendingByChannel.clear();
         lastEnabled = false;
     }
