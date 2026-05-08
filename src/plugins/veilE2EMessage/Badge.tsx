@@ -94,9 +94,18 @@ export function E2eBadge({ messageId }: { messageId: string; }) {
                 return;
             }
             let h = content.querySelector(":scope > .vc-veil-e2e-overlay") as HTMLElement | null;
-            if (!h || !h.isConnected || h.parentElement !== content) {
+            if (!h) {
                 h = document.createElement("span");
                 h.className = "vc-veil-e2e-overlay";
+            }
+            // Always (re-)append so the host stays the last child of
+            // the content node. Discord re-renders message-content
+            // children on edits, embed/attachment hydrations and
+            // reaction toggles, which can reorder our host to the
+            // start (the badge ends up on the left of the text).
+            // `appendChild` on an already-last-child is a no-op,
+            // otherwise it moves it back to the end.
+            if (h.parentElement !== content || h !== content.lastElementChild) {
                 content.appendChild(h);
             }
             if (attached !== h) { attached = h; setHost(h); }
@@ -105,8 +114,10 @@ export function E2eBadge({ messageId }: { messageId: string; }) {
         ensureHost();
 
         const observer = new MutationObserver(() => {
-            const ok = attached && attached.isConnected
-                && attached.parentElement?.id?.startsWith("message-content-") === true;
+            const ok = attached
+                && attached.isConnected
+                && attached.parentElement?.id?.startsWith("message-content-") === true
+                && attached === attached.parentElement.lastElementChild;
             if (!ok) ensureHost();
         });
         observer.observe(li, { childList: true, subtree: true });

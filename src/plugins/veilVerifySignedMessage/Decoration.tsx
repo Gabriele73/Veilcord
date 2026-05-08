@@ -386,11 +386,18 @@ export function VeilSigBadge({ message }: { message: any; }) {
                 return;
             }
             let host = content.querySelector(":scope > .vc-veil-sig-overlay") as HTMLElement | null;
-            if (!host || !host.isConnected) {
+            if (!host) {
                 host = document.createElement("span");
                 host.className = "vc-veil-sig-overlay";
-                content.appendChild(host);
-            } else if (host.parentElement !== content) {
+            }
+            // Always (re-)append so the host stays the LAST child of
+            // the content node. Discord rebuilds message-content
+            // children on edits, embed/attachment hydrations and
+            // reaction toggles, which can reorder our host to the
+            // start so the badge ends up on the left of the text.
+            // `appendChild` on an already-last-child is a no-op,
+            // otherwise it moves it back to the end.
+            if (host.parentElement !== content || host !== content.lastElementChild) {
                 content.appendChild(host);
             }
             if (attached !== host) {
@@ -402,11 +409,11 @@ export function VeilSigBadge({ message }: { message: any; }) {
         ensureHost();
 
         const observer = new MutationObserver(() => {
-            // Cheap guard: only re-run if our host actually went away or
-            // a different message-content node now lives under the <li>.
-            if (!attached || !attached.isConnected || attached.parentElement?.id?.startsWith("message-content-") !== true) {
-                ensureHost();
-            }
+            const ok = attached
+                && attached.isConnected
+                && attached.parentElement?.id?.startsWith("message-content-") === true
+                && attached === attached.parentElement.lastElementChild;
+            if (!ok) ensureHost();
         });
         observer.observe(li, { childList: true, subtree: true });
 
