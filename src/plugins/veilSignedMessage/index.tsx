@@ -136,8 +136,18 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
         // happens to serve later. Order matches `options.uploads`,
         // which Discord forwards as `message.attachments` in the same
         // order at MESSAGE_CREATE time on the receiver.
+        //
+        // Discord re-encodes some images (PNG, JPEG) to WebP inside
+        // CloudUpload.upload() via `maybeConvertToWebP`, which mutates
+        // `upload.item.file` to point at the converted bytes. We have
+        // to force that conversion to happen *before* we hash, or the
+        // CDN will serve different bytes than the ones we signed and
+        // every verifier will compute a mismatching digest. The method
+        // is idempotent, so calling it here is safe even when the
+        // upload pipeline runs it again later.
         const attachmentHashes: CanonicalAttachment[] = [];
         for (const upload of uploads) {
+            try { await upload?.maybeConvertToWebP?.(); } catch { /* fall through to hash whatever's there */ }
             const file: File | undefined = upload?.item?.file;
             if (!file) {
                 showToast("Sign mode: couldn't read an attachment to hash it.", Toasts.Type.FAILURE);
