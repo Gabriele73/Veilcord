@@ -10,8 +10,10 @@ import { addMessagePreSendListener, MessageSendListener, removeMessagePreSendLis
 import { updateMessage } from "@api/MessageUpdater";
 import { cryptoService, getActiveBindingForUid, VeilCryptoUtils, VeilX25519 } from "@plugins/veilCrypto";
 import { Devs } from "@utils/constants";
-import definePlugin from "@utils/types";
+import definePlugin, { PluginNative } from "@utils/types";
 import { ChannelStore, FluxDispatcher, showToast, Toasts, useEffect, UserStore, useState } from "@webpack/common";
+
+const Native = VencordNative.pluginHelpers.VeilE2EMessage as PluginNative<typeof import("./native")>;
 
 import { E2eBadge } from "./Badge";
 import { clearAll, clearEntry, DecryptionEntry, getEntry, setEntry } from "./decryptCache";
@@ -134,55 +136,28 @@ function placeholderForState(state: DecryptionEntry["state"]): string {
     }
 }
 
-/*
- * Wire-layer safety net invoked from inside Discord's `uploadFiles`
- * method via webpack patch. For every upload that carries our
- * Symbol-keyed ciphertext file, force-set `upload.item.file` back to
- * the ciphertext one final time. This protects against any code path
- * that may have re-attached the original plaintext file between
- * pre-send and the actual network upload.
- */
-function beforeUploadFiles(uploads: any): void {
-    if (!uploads) return;
-    const list: any[] = Array.isArray(uploads) ? uploads : [];
-    for (const upload of list) {
-        const cipher = upload?.[VEIL_CIPHERTEXT_FILE] as File | undefined;
-        if (!cipher) continue;
-        if (upload.item && upload.item.file !== cipher) {
-            upload.item.file = cipher;
-        }
-        if (upload.filename !== cipher.name) upload.filename = cipher.name;
-        if (upload.mimeType !== cipher.type) upload.mimeType = cipher.type;
-    }
-}
-
 /* ---------------- Send path ---------------- */
 
 /**
- * Symbol-keyed marker we attach to a CloudUpload after encrypting it,
- * so the `uploadFiles` patch can confirm the swap took (or re-apply it
- * defensively right before the file goes on the wire). Discord's
- * upload manager doesn't enumerate symbol-keyed properties so this
- * doesn't leak into anything serialized.
+ * Symbol-keyed markers we attach to a CloudUpload after encrypting it.
+ * Discord doesn't enumerate symbol-keyed properties, so they don't
+ * leak into anything serialized.
+ *
+ *  - VEIL_CIPHERTEXT_FILE: the new File the upload should send
+ *  - VEIL_LOCAL_BLOB: original plaintext Blob (for sender-side echo
+ *    rendering)
+ *  - VEIL_MANIFEST_ENTRY: the per-file manifest entry the send-listener
+ *    needs to bake into the encrypted message envelope
  */
 const VEIL_CIPHERTEXT_FILE = Symbol.for("VeilCipherFile");
+const VEIL_LOCAL_BLOB = Symbol.for("VeilLocalBlob");
+const VEIL_MANIFEST_ENTRY = Symbol.for("VeilManifestEntry");
 
 function randomCipherName(): string {
     const bytes = crypto.getRandomValues(new Uint8Array(8));
     let s = "";
     for (let i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, "0");
     return `veil_${s}${CIPHERTEXT_FILENAME_SUFFIX}`;
-}
-
-async function readUploadBytes(upload: any): Promise<{ bytes: Uint8Array; file: File; } | null> {
-    const file: File | undefined = upload?.item?.file;
-    if (!file) return null;
-    try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        return { bytes, file };
-    } catch {
-        return null;
-    }
 }
 
 async function readImageDimensions(file: File): Promise<{ width?: number; height?: number; }> {
@@ -199,8 +174,87 @@ async function readImageDimensions(file: File): Promise<{ width?: number; height
     }
 }
 
+/**
+ * Encrypt a CloudUpload in place, before its bytes go on the wire.
+ * Called from the patched `CloudUpload.prototype.upload` so the
+ * encryption happens *inside* the upload pipeline rather than at
+ * pre-send time. This avoids the cancel-and-retry path Discord's
+ * pipeline can't recover from.
+ *
+ * Idempotent: skips if the upload already carries our markers.
+ * Also skips when E2E isn't enabled for the upload's channel,
+ * so non-Veil channels are unaffected.
+ */
+async function encryptCloudUploadIfNeeded(upload: any): Promise<void> {
+    if (!upload || (upload as any)[VEIL_MANIFEST_ENTRY]) return;
+    const channelId: string | undefined = upload?.channelId;
+    if (!channelId || !isEnabled(channelId)) return;
+
+    try {
+        const file: File | undefined = upload?.item?.file;
+        if (!file) return;
+
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const dims = await readImageDimensions(file);
+        const { ciphertext, key, iv } = await cryptoService.encryptAttachmentBytes(bytes);
+
+        const newName = randomCipherName();
+        const newFile = new File([ciphertext], newName, { type: CIPHERTEXT_MIME });
+        const localBlob = new Blob([bytes], { type: file.type || "application/octet-stream" });
+
+        // Mutate the upload in place so anything that captured a
+        // reference to upload.item still sees the new file. Replacing
+        // the whole `item` object would leak a stale plaintext
+        // reference, which is the bug we're fixing.
+        if (upload.item) {
+            upload.item.file = newFile;
+        } else {
+            upload.item = { file: newFile, platform: 0, origin: "" };
+        }
+        upload.filename = newName;
+        upload.mimeType = CIPHERTEXT_MIME;
+        upload.preCompressionSize = ciphertext.byteLength;
+        upload.postCompressionSize = ciphertext.byteLength;
+        upload.currentSize = ciphertext.byteLength;
+        upload.isImage = false;
+        upload.isVideo = false;
+        upload.isThumbnail = false;
+        upload.spoiler = false;
+        upload.classification = "veil_encrypted";
+        upload.sensitive = false;
+        upload.waveform = undefined;
+        upload.durationSecs = undefined;
+
+        (upload as any)[VEIL_CIPHERTEXT_FILE] = newFile;
+        (upload as any)[VEIL_LOCAL_BLOB] = localBlob;
+        (upload as any)[VEIL_MANIFEST_ENTRY] = {
+            name: file.name,
+            mime: file.type || "application/octet-stream",
+            size: bytes.byteLength,
+            key: VeilCryptoUtils.bytesToBase64(key),
+            iv: VeilCryptoUtils.bytesToBase64(iv),
+            spoiler: false,
+            width: dims.width,
+            height: dims.height
+        } satisfies ManifestAttachment;
+    } catch (e) {
+        console.warn("[VeilE2E] CloudUpload encrypt failed", e);
+    }
+}
+
 const sendListener: MessageSendListener = async (channelId, messageObj, options) => {
-    if (!isEnabled(channelId)) return;
+    const uploads: any[] = (options as any)?.uploads ?? [];
+    const stickers: string[] = (options as any)?.stickers ?? [];
+    const text = typeof messageObj.content === "string" ? messageObj.content : "";
+
+    // If any upload was already encrypted by the CloudUpload patch
+    // (because E2E was on at paste time), force E2E for this send even
+    // if the user toggled E2E off in the meantime — we can't undo a
+    // ciphertext upload, and shipping it with plaintext content would
+    // leak the keys / leave the recipient with a `.veilbin`.
+    const anyEncrypted = uploads.some(u => (u as any)[VEIL_MANIFEST_ENTRY]);
+    const e2eOn = isEnabled(channelId) || anyEncrypted;
+    if (!e2eOn) return;
 
     const channel = ChannelStore.getChannel(channelId);
     if (!channel || !channel.isDM() || channel.isGroupDM()) {
@@ -208,10 +262,6 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
         setEnabled(channelId, false);
         return { cancel: true };
     }
-
-    const text = typeof messageObj.content === "string" ? messageObj.content : "";
-    const uploads: any[] = (options as any)?.uploads ?? [];
-    const stickers: string[] = (options as any)?.stickers ?? [];
 
     if (text.length === 0 && uploads.length === 0 && stickers.length === 0) return;
 
@@ -249,91 +299,45 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
 
         const ourPub = await cryptoService.getPublicKey();
 
-        // Encrypt every attachment with a fresh AES-GCM-256 key+iv. The
-        // ciphertext takes the upload's place; the keys travel inside
-        // the content envelope manifest so only intended recipients can
-        // recover the file bytes. We also keep a Blob of the plaintext
-        // bytes locally so the sender's own-message echo doesn't round-
-        // trip through the CDN to render its preview.
-        const manifestAttachments: ManifestAttachment[] = [];
-        const localPreviews: RecentSendAttachment[] = [];
+        // Make sure every upload is encrypted before send. The
+        // CloudUpload patch normally handles this when E2E is on at
+        // paste/drag time, but if the user toggled E2E on after
+        // already attaching files, encrypt them now — but only if
+        // they haven't started uploading yet. Mid-flight cancel and
+        // restart breaks Discord's pipeline irrecoverably.
         for (const upload of uploads) {
-            const read = await readUploadBytes(upload);
-            if (!read) {
-                showToast("Couldn't read an attachment to encrypt it.", Toasts.Type.FAILURE);
+            if ((upload as any)[VEIL_MANIFEST_ENTRY]) continue;
+            const status: string | undefined = upload?.status;
+            if (status && status !== "NOT_STARTED") {
+                showToast(
+                    "Re-attach this file to send it encrypted (it already started uploading).",
+                    Toasts.Type.FAILURE
+                );
                 return { cancel: true };
             }
-            const { bytes, file } = read;
-            const dims = await readImageDimensions(file);
-            const { ciphertext, key, iv } = await cryptoService.encryptAttachmentBytes(bytes);
-
-            const newName = randomCipherName();
-            const newFile = new File([ciphertext], newName, { type: CIPHERTEXT_MIME });
-            const localBlob = new Blob([bytes], { type: file.type || "application/octet-stream" });
-
-            // The upload may already be in flight (Discord eagerly
-            // uploads on drag in some builds). Reset its state so the
-            // upload pipeline restarts with the ciphertext file.
-            try { upload.cancel?.(); } catch { /* ignore */ }
-            upload.responseUrl = "";
-            upload.uploadedFilename = "";
-            upload.etag = undefined;
-            upload.loaded = 0;
-            upload.error = undefined;
-            upload.startTime = 0;
-            upload.status = "NOT_STARTED";
-
-            // Replace the file in-place. Mutating `upload.item.file`
-            // works regardless of whether Discord captured `upload.item`
-            // by reference at construction; replacing the whole `item`
-            // object would leave any captured reference pointing at the
-            // original plaintext file.
-            if (upload.item) {
-                upload.item.file = newFile;
-            } else {
-                upload.item = { file: newFile, platform: 0, origin: "" };
+            await encryptCloudUploadIfNeeded(upload);
+            if (!(upload as any)[VEIL_MANIFEST_ENTRY]) {
+                showToast("Couldn't encrypt an attachment.", Toasts.Type.FAILURE);
+                return { cancel: true };
             }
-            upload.filename = newName;
-            upload.mimeType = CIPHERTEXT_MIME;
-            upload.preCompressionSize = ciphertext.byteLength;
-            upload.postCompressionSize = ciphertext.byteLength;
-            upload.currentSize = ciphertext.byteLength;
-            upload.isImage = false;
-            upload.isVideo = false;
-            upload.isThumbnail = false;
-            upload.spoiler = false;
-            upload.description = null;
-            upload.classification = "veil_encrypted";
-            upload.sensitive = false;
-            upload.waveform = undefined;
-            upload.durationSecs = undefined;
-
-            // Stash the ciphertext file on the upload via a Symbol so
-            // the `uploadFiles` patch can swap it back in at the wire
-            // layer if anything reverted `item.file` between now and
-            // then (e.g. an unrelated upload-store mutation).
-            (upload as any)[VEIL_CIPHERTEXT_FILE] = newFile;
-
-            manifestAttachments.push({
-                name: file.name,
-                mime: file.type || "application/octet-stream",
-                size: bytes.byteLength,
-                key: VeilCryptoUtils.bytesToBase64(key),
-                iv: VeilCryptoUtils.bytesToBase64(iv),
-                spoiler: false,
-                width: dims.width,
-                height: dims.height
-            });
-            localPreviews.push({
-                blob: localBlob,
-                name: file.name,
-                mime: file.type || "application/octet-stream",
-                size: bytes.byteLength,
-                spoiler: false,
-                width: dims.width,
-                height: dims.height
-            });
         }
+
+        const manifestAttachments: ManifestAttachment[] = uploads.map(
+            u => (u as any)[VEIL_MANIFEST_ENTRY] as ManifestAttachment
+        );
+        const localPreviews: RecentSendAttachment[] = uploads.map(u => {
+            const m = (u as any)[VEIL_MANIFEST_ENTRY] as ManifestAttachment;
+            const blob = (u as any)[VEIL_LOCAL_BLOB] as Blob;
+            return {
+                blob,
+                name: m.name,
+                mime: m.mime,
+                size: m.size,
+                spoiler: !!m.spoiler,
+                width: m.width,
+                height: m.height
+            };
+        });
 
         const manifest: VeilManifest = { v: 1, text, attachments: manifestAttachments };
         const plaintextPayload = manifestAttachments.length === 0
@@ -570,9 +574,14 @@ async function decryptAndCommit(messageId: string): Promise<void> {
             continue;
         }
         try {
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
-            const ciphertext = new Uint8Array(await res.arrayBuffer());
+            // Fetch ciphertext via the main process to bypass the
+            // renderer's same-origin / CORS rules — Discord CDN doesn't
+            // send Access-Control-Allow-Origin for our binary mime.
+            const fetched = await Native.fetchAttachmentBytes(url);
+            if (!fetched.ok) throw new Error(fetched.error);
+            const ciphertext = fetched.bytes instanceof Uint8Array
+                ? fetched.bytes
+                : new Uint8Array(fetched.bytes as any);
             const keyBytes = VeilCryptoUtils.base64ToBytes(meta.key);
             const ivBytes = VeilCryptoUtils.base64ToBytes(meta.iv);
             const plain = await cryptoService.decryptAttachmentBytes(ciphertext, keyBytes, ivBytes);
@@ -879,16 +888,16 @@ export default definePlugin({
     managedStyle,
 
     /*
-     * Patches against Discord's MessageStore so the raw "🔒 <base64> …"
-     * body is replaced with a placeholder synchronously, before the
-     * cache commits and React renders. This is what kills the per-decrypt
-     * reflow that the old DOM-portal cover used to paper over.
+     * Patches:
      *
-     * The `uploadFiles` patch is a wire-layer safety net: pre-send has
-     * already swapped `upload.item.file` to the ciphertext, but if any
-     * other plugin or Discord code path reverted it between pre-send
-     * and the actual upload call, this re-applies the swap right
-     * before bytes go on the network.
+     * - MessageStore: substitute the raw "🔒 <base64> …" body with a
+     *   placeholder synchronously, before the cache commits and React
+     *   renders. Kills the per-decrypt reflow.
+     *
+     * - CloudUpload.prototype.upload: encrypt attachments inside the
+     *   upload pipeline, right before bytes go on the wire. Doing this
+     *   here (rather than in pre-send) avoids cancelling an already-
+     *   in-flight upload, which Discord's pipeline can't recover from.
      */
     patches: [
         {
@@ -909,11 +918,11 @@ export default definePlugin({
             ]
         },
         {
-            find: "async uploadFiles(",
+            find: "webp conversion skipped",
             replacement: [
                 {
-                    match: /async uploadFiles\((\i)\){/,
-                    replace: "$&$self.beforeUploadFiles($1);"
+                    match: /(?<=async upload\(\){)/,
+                    replace: "await $self.encryptCloudUploadIfNeeded(this);"
                 }
             ]
         }
@@ -921,7 +930,7 @@ export default definePlugin({
 
     preprocessMessage,
     preprocessMessages,
-    beforeUploadFiles,
+    encryptCloudUploadIfNeeded,
 
     start() {
         addChatBarButton(BUTTON_ID, VeilE2EButton, LockIcon);
