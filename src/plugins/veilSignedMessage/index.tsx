@@ -178,7 +178,18 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
 
         const publicKey = await cryptoService.getPublicKey();
         const marker = VeilZwc.encodeMarker();
-        const finalContent = text + marker;
+        // Insert a single regular space between the user's text and the
+        // ZWC marker. Discord's server-side URL extractor uses `\S+`, so
+        // a URL at the very end of the message would otherwise consume
+        // every zero-width marker char into the URL token and the embed
+        // pipeline would silently drop it. A trailing space terminates
+        // the URL match cleanly, and chat rendering hides it.
+        //
+        // Both visible body and canonical body include this space so
+        // the receiver's `stripZwc` (which only removes ZWC chars,
+        // not whitespace) gives back the same string the sender signed.
+        const visibleBody = text + " ";
+        const finalContent = visibleBody + marker;
 
         if (finalContent.length > 2000) {
             showToast(`Sign mode: message is too long by ${finalContent.length - 2000} chars.`, Toasts.Type.FAILURE);
@@ -196,7 +207,7 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
         let signedBody: string | null = null;
         let signature: string | null = null;
         if (uploads.length === 0) {
-            signedBody = VeilSignedBody.buildCanonicalSignedBody(text, []);
+            signedBody = VeilSignedBody.buildCanonicalSignedBody(visibleBody, []);
             signature = await cryptoService.sign(signedBody);
         }
 
@@ -205,7 +216,7 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
             signedBody,
             publicKey,
             signature,
-            plainText: text,
+            plainText: visibleBody,
             needsAttachmentBinding: uploads.length > 0,
             expiresAt: Date.now() + PENDING_TTL_MS
         });
