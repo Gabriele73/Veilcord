@@ -93,18 +93,19 @@ function disableAllE2eChannels() {
  * does understand blob: URLs, so the file actually saves with the
  * right filename + bytes.
  *
- * Listener is registered at capture phase so it runs before Discord's
- * attachment-card click handler. It only takes over when the URL is
- * one of ours, so non-Veil attachments behave exactly as before.
+ * We ONLY take over anchors that carry an explicit `download` attribute.
+ * Discord wraps inline images in `<a href="<original-url>">` whose
+ * click opens the lightbox and whose right-click feeds the native
+ * "Save Image As" / "Copy Image" context menu. Those anchors don't set
+ * `download`, so this filter leaves expand-on-click and the context
+ * menu untouched while still catching every Discord download button.
  */
-function findEnclosingHrefBlob(start: Element | null): { href: string; filename: string | null; } | null {
+function findEnclosingDownloadAnchor(start: Element | null): HTMLAnchorElement | null {
     let el: Element | null = start;
     while (el && el !== document.body) {
-        if (el instanceof HTMLAnchorElement) {
+        if (el instanceof HTMLAnchorElement && el.hasAttribute("download")) {
             const href = el.getAttribute("href") || el.href || "";
-            if (href.startsWith("blob:")) {
-                return { href, filename: el.getAttribute("download") };
-            }
+            if (href.startsWith("blob:")) return el;
         }
         el = el.parentElement;
     }
@@ -127,13 +128,14 @@ function onAttachmentDownloadClick(e: MouseEvent): void {
     if (e.button !== 0) return;
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
-    const found = findEnclosingHrefBlob(target);
-    if (!found) return;
-    const meta = ownsBlobUrl(found.href);
+    const anchor = findEnclosingDownloadAnchor(target);
+    if (!anchor) return;
+    const href = anchor.getAttribute("href") || anchor.href || "";
+    const meta = ownsBlobUrl(href);
     if (!meta) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    triggerBlobDownload(meta.blobUrl, found.filename || meta.name || "download");
+    triggerBlobDownload(meta.blobUrl, anchor.getAttribute("download") || meta.name || "download");
 }
 
 /*
