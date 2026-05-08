@@ -77,35 +77,72 @@ function disableAllE2eChannels() {
 /*
  * Download-click interceptor.
  *
- * Discord renders attachment cards (zips, pdfs, audio, anything that
- * isn't an inline image) with a download icon, and image lightboxes
- * with a "Download" link. Both end up routing the URL through Electron's
- * native downloader on desktop, which runs in the main process and
- * cannot resolve renderer-scoped `blob:` URLs. The result: the user
- * sees an empty / failed download dialog for every Veil-decrypted
- * attachment, even though the renderer can display the same blob URL
- * just fine inline.
+ * Discord's various download triggers (file-card download icon, image
+ * lightbox "Download" link, the inline anchor on non-image attachment
+ * cards) all end up routing the URL through Electron's main-process
+ * downloader. Main can't resolve renderer-scoped `blob:` URLs, so the
+ * download silently fails or opens the blob URL in an external
+ * browser shell instead of saving the file.
  *
- * Solution: catch the click before Discord's listener fires, look up
- * the cached blob via `ownsBlobUrl`, and trigger the download ourselves
- * by programmatically clicking a fresh `<a download>` element. That
- * path goes through Chromium's renderer-scope download handler which
- * does understand blob: URLs, so the file actually saves with the
- * right filename + bytes.
+ * Solution: catch the click before Discord's handler, find the blob
+ * URL we own, and trigger the download ourselves with a programmatic
+ * `<a download>` click. That stays in the renderer where blob URLs
+ * resolve correctly.
  *
- * We ONLY take over anchors that carry an explicit `download` attribute.
- * Discord wraps inline images in `<a href="<original-url>">` whose
- * click opens the lightbox and whose right-click feeds the native
- * "Save Image As" / "Copy Image" context menu. Those anchors don't set
- * `download`, so this filter leaves expand-on-click and the context
- * menu untouched while still catching every Discord download button.
+ * Tricky case: Discord wraps inline images in `<a href="<blob>">`
+ * whose click opens the lightbox and whose right-click feeds the
+ * native context menu. Intercepting that click would break expand
+ * and "Save Image As". We filter it out by checking whether the
+ * anchor directly wraps an `<img>` — that pattern is unique to the
+ * inline-image expand wrapper. Every download trigger I've seen
+ * either has a `download` attribute, an `aria-label` containing
+ * "download", or doesn't wrap an image at all.
  */
-function findEnclosingDownloadAnchor(start: Element | null): HTMLAnchorElement | null {
+function isImageExpandAnchor(a: HTMLAnchorElement): boolean {
+    // The expand wrapper directly contains the image element. Lightbox
+    // download links and file-card anchors don't.
+    return a.querySelector(":scope > img, :scope > picture, :scope > video") != null;
+}
+
+function looksLikeDownloadTrigger(el: Element): boolean {
+    if (el instanceof HTMLAnchorElement) {
+        if (el.hasAttribute("download")) return true;
+        if (!isImageExpandAnchor(el)) return true;
+        return false;
+    }
+    const aria = el.getAttribute("aria-label") || "";
+    if (/download/i.test(aria)) return true;
+    return false;
+}
+
+function findEnclosingDownloadTarget(start: Element | null): { url: string; filename: string | null; } | null {
     let el: Element | null = start;
     while (el && el !== document.body) {
-        if (el instanceof HTMLAnchorElement && el.hasAttribute("download")) {
-            const href = el.getAttribute("href") || el.href || "";
-            if (href.startsWith("blob:")) return el;
+        if (looksLikeDownloadTrigger(el)) {
+            if (el instanceof HTMLAnchorElement) {
+                const href = el.getAttribute("href") || el.href || "";
+                if (href.startsWith("blob:")) {
+                    return { url: href, filename: el.getAttribute("download") };
+                }
+            } else {
+                // Non-anchor download trigger (button or div). Pull the
+                // blob URL from the nearest enclosing card / lightbox by
+                // looking for any descendant or sibling with a blob
+                // href / src we own.
+                const card = (el.closest("[class*='attachment'], [class*='Attachment'], [role='dialog']") as HTMLElement | null) ?? document.body;
+                const anchor = card.querySelector("a[href^='blob:']") as HTMLAnchorElement | null;
+                if (anchor) {
+                    const href = anchor.getAttribute("href") || anchor.href || "";
+                    return { url: href, filename: anchor.getAttribute("download") };
+                }
+                const media = card.querySelector("img[src^='blob:'], video[src^='blob:'], source[src^='blob:']") as HTMLElement | null;
+                if (media) {
+                    const src = (media as any).src as string;
+                    if (typeof src === "string" && src.startsWith("blob:")) {
+                        return { url: src, filename: null };
+                    }
+                }
+            }
         }
         el = el.parentElement;
     }
@@ -128,14 +165,13 @@ function onAttachmentDownloadClick(e: MouseEvent): void {
     if (e.button !== 0) return;
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
-    const anchor = findEnclosingDownloadAnchor(target);
-    if (!anchor) return;
-    const href = anchor.getAttribute("href") || anchor.href || "";
-    const meta = ownsBlobUrl(href);
+    const found = findEnclosingDownloadTarget(target);
+    if (!found) return;
+    const meta = ownsBlobUrl(found.url);
     if (!meta) return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    triggerBlobDownload(meta.blobUrl, anchor.getAttribute("download") || meta.name || "download");
+    triggerBlobDownload(meta.blobUrl, found.filename || meta.name || "download");
 }
 
 /*
