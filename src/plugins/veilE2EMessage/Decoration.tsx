@@ -189,6 +189,14 @@ export function E2eDecoration({ message }: E2eDecorationProps) {
                 content.appendChild(cover);
             }
             if (attachedCover !== cover) { attachedCover = cover; setCoverHost(cover); }
+
+            // Hide the raw "🔒 <base64>\nThis message was encrypted with
+            // Veilcord" body synchronously on mount, before paint, so the
+            // user never sees the long base64 placeholder collapse to the
+            // plaintext height once decrypt resolves. The cover renders
+            // a "Decrypting…" placeholder until plaintext arrives, so the
+            // message height stays stable across the decrypt round-trip.
+            content.classList.add("vc-veil-e2e-has-cover");
         };
 
         ensureHosts();
@@ -209,20 +217,6 @@ export function E2eDecoration({ message }: E2eDecorationProps) {
         };
     }, [discordMessageId]);
 
-    // Toggle the "hide raw body, show cover" class on the message
-    // content based on whether we have plaintext to show. Mounted in
-    // its own effect so it tracks state changes (e.g. vault unlocks
-    // after we initially rendered as `vault-locked`).
-    useEffect(() => {
-        const content = coverHost?.parentElement;
-        if (!content) return;
-        if (state === "decrypted" && plaintext != null) {
-            content.classList.add("vc-veil-e2e-has-cover");
-        } else {
-            content.classList.remove("vc-veil-e2e-has-cover");
-        }
-    }, [coverHost, state, plaintext]);
-
     const meta = FLAIR_META[state];
 
     const badge = (
@@ -237,15 +231,31 @@ export function E2eDecoration({ message }: E2eDecorationProps) {
         </span>
     );
 
-    const cover = state === "decrypted" && plaintext != null
-        ? <span className="vc-veil-e2e-plaintext">{plaintext}</span>
-        : null;
+    /*
+     * The cover always renders something so the message-content height
+     * is stable from the moment we hide the raw body. State transitions
+     * swap text inside the cover but never toggle the cover on or off,
+     * which is what kept causing the chat to reflow as messages
+     * decrypted one by one.
+     */
+    let cover: JSX.Element;
+    if (state === "decrypted" && plaintext != null) {
+        cover = <span className="vc-veil-e2e-plaintext">{plaintext}</span>;
+    } else if (state === "vault-locked") {
+        cover = <span className="vc-veil-e2e-cover-msg">Unlock your Veil key to read this message.</span>;
+    } else if (state === "locked-out") {
+        cover = <span className="vc-veil-e2e-cover-msg">Encrypted to a different Veil key.</span>;
+    } else if (state === "failed") {
+        cover = <span className="vc-veil-e2e-cover-msg vc-veil-e2e-cover-msg--failed">Couldn't decrypt this message.</span>;
+    } else {
+        cover = <span className="vc-veil-e2e-cover-msg vc-veil-e2e-cover-msg--loading">Decrypting…</span>;
+    }
 
     return (
         <>
             <span ref={anchorRef} className="vc-veil-e2e-anchor" aria-hidden="true" />
             {badgeHost && ReactDOM.createPortal(badge, badgeHost)}
-            {coverHost && cover && ReactDOM.createPortal(cover, coverHost)}
+            {coverHost && ReactDOM.createPortal(cover, coverHost)}
         </>
     );
 }

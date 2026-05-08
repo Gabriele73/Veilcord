@@ -36,6 +36,21 @@
     color: var(--text-normal, #dbdee1);
 }
 
+/* Placeholder text shown in the cover while we're waiting on a
+ * decrypt, when the envelope isn't ours, or when GCM auth fails.
+ * Stays single-line so the message height matches the eventual
+ * plaintext height for the typical short-message case. */
+.vc-veil-e2e-cover-msg {
+    display: inline;
+    color: var(--text-muted, #949ba4);
+    font-style: italic;
+}
+
+.vc-veil-e2e-cover-msg--failed {
+    color: var(--status-danger, #f23f43);
+    font-style: normal;
+}
+
 .vc-veil-e2e-overlay {
     display: inline;
     margin-left: 6px;
