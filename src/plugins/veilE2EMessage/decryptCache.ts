@@ -74,6 +74,30 @@ export function clearAll(): void {
 }
 
 /**
+ * True if the given URL (with or without fragment / query) points at
+ * one of our currently-cached decrypted-attachment blobs. Used by the
+ * download-click interceptor to decide whether to take over the click.
+ */
+export function ownsBlobUrl(url: string | null | undefined): DecryptedAttachmentMeta | null {
+    if (!url) return null;
+    // Strip any "#…" fragment or "?…" query Discord may have appended;
+    // the blob URL identity is the part before either of those.
+    const cut = Math.min(
+        url.indexOf("#") === -1 ? url.length : url.indexOf("#"),
+        url.indexOf("?") === -1 ? url.length : url.indexOf("?")
+    );
+    const base = url.slice(0, cut);
+    if (!base.startsWith("blob:")) return null;
+    for (const entry of cache.values()) {
+        if (!entry.attachments) continue;
+        for (const a of entry.attachments) {
+            if (a.blobUrl === base) return a;
+        }
+    }
+    return null;
+}
+
+/**
  * Subscribe to entry changes. Listener gets the messageId that changed.
  */
 export function subscribe(listener: (messageId: string) => void): () => void {

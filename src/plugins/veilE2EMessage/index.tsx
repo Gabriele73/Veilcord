@@ -16,7 +16,7 @@ import { ChannelStore, FluxDispatcher, showToast, Toasts, useEffect, UserStore, 
 const Native = VencordNative.pluginHelpers.VeilE2EMessage as PluginNative<typeof import("./native")>;
 
 import { E2eBadge } from "./Badge";
-import { clearAll, clearEntry, DecryptionEntry, getEntry, setEntry } from "./decryptCache";
+import { clearAll, clearEntry, DecryptionEntry, getEntry, ownsBlobUrl, setEntry } from "./decryptCache";
 import { LockIcon } from "./LockIcon";
 import {
     CIPHERTEXT_FILENAME_SUFFIX,
@@ -72,6 +72,68 @@ function broadcastE2eOn() {
 function disableAllE2eChannels() {
     const channelIds = Array.from(enabledByChannel.keys());
     for (const cid of channelIds) setEnabled(cid, false);
+}
+
+/*
+ * Download-click interceptor.
+ *
+ * Discord renders attachment cards (zips, pdfs, audio, anything that
+ * isn't an inline image) with a download icon, and image lightboxes
+ * with a "Download" link. Both end up routing the URL through Electron's
+ * native downloader on desktop, which runs in the main process and
+ * cannot resolve renderer-scoped `blob:` URLs. The result: the user
+ * sees an empty / failed download dialog for every Veil-decrypted
+ * attachment, even though the renderer can display the same blob URL
+ * just fine inline.
+ *
+ * Solution: catch the click before Discord's listener fires, look up
+ * the cached blob via `ownsBlobUrl`, and trigger the download ourselves
+ * by programmatically clicking a fresh `<a download>` element. That
+ * path goes through Chromium's renderer-scope download handler which
+ * does understand blob: URLs, so the file actually saves with the
+ * right filename + bytes.
+ *
+ * Listener is registered at capture phase so it runs before Discord's
+ * attachment-card click handler. It only takes over when the URL is
+ * one of ours, so non-Veil attachments behave exactly as before.
+ */
+function findEnclosingHrefBlob(start: Element | null): { href: string; filename: string | null; } | null {
+    let el: Element | null = start;
+    while (el && el !== document.body) {
+        if (el instanceof HTMLAnchorElement) {
+            const href = el.getAttribute("href") || el.href || "";
+            if (href.startsWith("blob:")) {
+                return { href, filename: el.getAttribute("download") };
+            }
+        }
+        el = el.parentElement;
+    }
+    return null;
+}
+
+function triggerBlobDownload(href: string, filename: string): void {
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    requestAnimationFrame(() => {
+        try { a.remove(); } catch { /* ignore */ }
+    });
+}
+
+function onAttachmentDownloadClick(e: MouseEvent): void {
+    if (e.button !== 0) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    const found = findEnclosingHrefBlob(target);
+    if (!found) return;
+    const meta = ownsBlobUrl(found.href);
+    if (!meta) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    triggerBlobDownload(meta.blobUrl, found.filename || meta.name || "download");
 }
 
 /*
@@ -977,6 +1039,7 @@ export default definePlugin({
         FluxDispatcher.subscribe("MESSAGE_DELETE_BULK", onMessageDelete);
         window.addEventListener("veilcrypto:state-change", onVaultStateChange);
         window.addEventListener(MODE_SIGN_ON_EVENT, disableAllE2eChannels);
+        document.addEventListener("click", onAttachmentDownloadClick, true);
     },
 
     stop() {
@@ -991,6 +1054,7 @@ export default definePlugin({
         FluxDispatcher.unsubscribe("MESSAGE_DELETE_BULK", onMessageDelete);
         window.removeEventListener("veilcrypto:state-change", onVaultStateChange);
         window.removeEventListener(MODE_SIGN_ON_EVENT, disableAllE2eChannels);
+        document.removeEventListener("click", onAttachmentDownloadClick, true);
         enabledByChannel.clear();
         pendingByMessageId.clear();
         recentSendsByEnvelopeB64.clear();
