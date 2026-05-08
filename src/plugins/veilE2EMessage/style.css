@@ -1,6 +1,11 @@
 /*
  * Veil end-to-end DM flair styles.
  *
+ * The cover/hide hack the old portal-based receiver used is gone:
+ * decryption now mutates `message.content` at the Flux store level, so
+ * Discord renders the plaintext directly. Only the small inline flair
+ * pill (and its portal anchor) remain as DOM additions.
+ *
  * Colors follow the CLAUDE.md contrast rule: every token is paired
  * with an explicit hex fallback, and the flair scopes its own
  * --veil-* variables so nested text never picks up a surface
@@ -11,50 +16,58 @@
     display: none;
 }
 
-/* When the parent message-content gets `vc-veil-e2e-has-cover` we hide
- * the original Discord-rendered children (the raw "🔒 <base64> \n
- * This message was encrypted with Veilcord" placeholder) and let our
- * inline cover span carry the visible plaintext. The flair overlay
- * sits at the end as the last child, exactly like the signed-message
- * check mark. */
-[id^="message-content-"].vc-veil-e2e-has-cover > *:not(.vc-veil-e2e-cover):not(.vc-veil-e2e-overlay) {
-    display: none !important;
-}
-
-.vc-veil-e2e-cover {
-    --veil-cover-fg: var(--text-normal, #dbdee1);
-
-    display: inline;
-    color: var(--veil-cover-fg);
-    font: inherit;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-.vc-veil-e2e-plaintext {
-    display: inline;
-    color: var(--text-normal, #dbdee1);
-}
-
-/* Placeholder text shown in the cover while we're waiting on a
- * decrypt, when the envelope isn't ours, or when GCM auth fails.
- * Stays single-line so the message height matches the eventual
- * plaintext height for the typical short-message case. */
-.vc-veil-e2e-cover-msg {
-    display: inline;
-    color: var(--text-muted, #949ba4);
-    font-style: italic;
-}
-
-.vc-veil-e2e-cover-msg--failed {
-    color: var(--status-danger, #f23f43);
-    font-style: normal;
-}
-
 .vc-veil-e2e-overlay {
     display: inline;
     margin-left: 6px;
     vertical-align: baseline;
+}
+
+.vc-veil-e2e-flair {
+    --veil-flair-fg: var(--text-muted, #949ba4);
+    --veil-flair-bg: var(--background-modifier-hover, rgba(78, 80, 88, 0.3));
+
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    line-height: 14px;
+    font-weight: 600;
+    color: var(--veil-flair-fg);
+    background: var(--veil-flair-bg);
+    vertical-align: baseline;
+    cursor: default;
+    user-select: none;
+}
+
+.vc-veil-e2e-flair svg {
+    width: 11px;
+    height: 11px;
+    color: var(--veil-flair-fg);
+}
+
+.vc-veil-e2e-flair__label {
+    letter-spacing: 0.02em;
+}
+
+.vc-veil-e2e-flair--loading {
+    --veil-flair-fg: var(--text-muted, #949ba4);
+}
+
+.vc-veil-e2e-flair--decrypted {
+    --veil-flair-fg: var(--text-link, #00a8fc);
+    --veil-flair-bg: color-mix(in srgb, var(--text-link, #00a8fc) 18%, transparent);
+}
+
+.vc-veil-e2e-flair--locked {
+    --veil-flair-fg: var(--text-muted, #949ba4);
+    --veil-flair-bg: var(--background-modifier-hover, rgba(78, 80, 88, 0.3));
+}
+
+.vc-veil-e2e-flair--failed {
+    --veil-flair-fg: var(--status-danger, #f23f43);
+    --veil-flair-bg: color-mix(in srgb, var(--status-danger, #f23f43) 16%, transparent);
 }
 
 .vc-veil-e2e-flair {

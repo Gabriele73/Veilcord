@@ -12,7 +12,7 @@ import { Divider } from "@components/Divider";
 import { Flex } from "@components/Flex";
 import { HeadingTertiary } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
-import { cryptoService, veilApiBase } from "@plugins/veilCrypto";
+import { CanonicalAttachment, cryptoService, veilApiBase, VeilSignedBody } from "@plugins/veilCrypto";
 import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
 import { useEffect, useState } from "@webpack/common";
 
@@ -79,6 +79,7 @@ export function VerifyModal({
     sigRef,
     discordMessageId,
     strippedContent,
+    attachmentUrls,
     authorTag,
     timestamp
 }: {
@@ -86,6 +87,7 @@ export function VerifyModal({
     sigRef: VeilSigRef;
     discordMessageId: string | null;
     strippedContent: string;
+    attachmentUrls: string[];
     authorTag?: string;
     timestamp?: string;
 }) {
@@ -93,6 +95,8 @@ export function VerifyModal({
     const [record, setRecord] = useState<FetchedRecord | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [copyHint, setCopyHint] = useState<string | null>(null);
+    /** True iff verification succeeded against the v2 attachments-bound canonical body. */
+    const [attachmentsBound, setAttachmentsBound] = useState<boolean | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -109,11 +113,47 @@ export function VerifyModal({
         };
 
         const verifyRecord = async (normalized: FetchedRecord) => {
-            const signedBody = normalized.storedMessage ?? strippedContent;
             try {
-                const ok = await cryptoService.verify(signedBody, normalized.signature, normalized.publicKey);
+                let ok = false;
+                let bound: boolean | null = null;
+                // v2 records: canonical body lives on the backend, no
+                // attachment binding existed at sign time. v3 records:
+                // reconstruct canonical body from live message and
+                // attachment hashes; fall back to text-only canonical
+                // for messages signed by older clients that didn't
+                // bind file content.
+                if (sigRef.v === 2 && typeof normalized.storedMessage === "string") {
+                    ok = await cryptoService.verify(normalized.storedMessage, normalized.signature, normalized.publicKey);
+                } else {
+                    if (attachmentUrls.length > 0) {
+                        const hashes: CanonicalAttachment[] = [];
+                        let allHashed = true;
+                        for (const url of attachmentUrls) {
+                            try {
+                                const res = await fetch(url);
+                                if (!res.ok) { allHashed = false; break; }
+                                const bytes = new Uint8Array(await res.arrayBuffer());
+                                hashes.push({ sha256Hex: await cryptoService.sha256Hex(bytes) });
+                            } catch {
+                                allHashed = false;
+                                break;
+                            }
+                        }
+                        if (allHashed) {
+                            const canonical = VeilSignedBody.buildCanonicalSignedBody(strippedContent, hashes);
+                            ok = await cryptoService.verify(canonical, normalized.signature, normalized.publicKey);
+                            if (ok) bound = true;
+                        }
+                    }
+                    if (!ok) {
+                        const legacy = VeilSignedBody.buildCanonicalSignedBody(strippedContent, []);
+                        ok = await cryptoService.verify(legacy, normalized.signature, normalized.publicKey);
+                        if (ok && attachmentUrls.length > 0) bound = false;
+                    }
+                }
                 if (cancelled) return;
                 setStatus(ok ? "valid" : "invalid");
+                setAttachmentsBound(bound);
             } catch (e: any) {
                 if (cancelled) return;
                 setStatus("error");
@@ -183,7 +223,7 @@ export function VerifyModal({
             cancelled = true;
             window.removeEventListener(REGISTERED_EVENT, restartFromEvent as EventListener);
         };
-    }, [sigRef.v, sigRef.id, discordMessageId, strippedContent]);
+    }, [sigRef.v, sigRef.id, discordMessageId, strippedContent, attachmentUrls.join("|")]);
 
     const copy = (label: string, value: string) => {
         navigator.clipboard.writeText(value).then(() => {
@@ -206,7 +246,7 @@ export function VerifyModal({
         })()
         : null;
 
-    const displayedBody = record?.storedMessage ?? strippedContent;
+    const displayedBody = VeilSignedBody.stripAttachmentBlock(record?.storedMessage ?? strippedContent);
 
     return (
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className="vc-veil-modal">
@@ -233,6 +273,19 @@ export function VerifyModal({
                                     </Paragraph>
                                 </Card>
                             </section>
+
+                            {attachmentUrls.length > 0 && (
+                                <section>
+                                    <HeadingTertiary>Attachments</HeadingTertiary>
+                                    <Paragraph style={{ margin: 0 }}>
+                                        {attachmentsBound === true
+                                            ? `${attachmentUrls.length} file${attachmentUrls.length === 1 ? "" : "s"} bound to this signature.`
+                                            : attachmentsBound === false
+                                                ? `${attachmentUrls.length} file${attachmentUrls.length === 1 ? "" : "s"} attached, but the signature was created before attachment binding shipped. The text is signed; the files are not.`
+                                                : "Verifying attachments…"}
+                                    </Paragraph>
+                                </section>
+                            )}
 
                             <Divider />
 

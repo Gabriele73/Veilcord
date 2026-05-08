@@ -17,6 +17,8 @@ export type { VeilE2eContext } from "./service";
 export { veilApiBase } from "./settings";
 export * as VeilCryptoUtils from "./utils";
 export * as VeilEd25519 from "./ed25519";
+export * as VeilSignedBody from "./signedBody";
+export type { CanonicalAttachment } from "./signedBody";
 export * as VeilX25519 from "./x25519";
 export * as VeilZwc from "./zwc";
 export {

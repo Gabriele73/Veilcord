@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { cryptoService, isBindingActiveAt, veilApiBase } from "@plugins/veilCrypto";
+import { CanonicalAttachment, cryptoService, isBindingActiveAt, veilApiBase, VeilSignedBody } from "@plugins/veilCrypto";
 import { openModal } from "@utils/modal";
 import { ReactDOM, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
 
@@ -60,6 +60,45 @@ interface LookupInput {
     /** Live Discord message content with ZWC stripped — required to verify v3. */
     strippedContent: string;
     authorId: string | null;
+    /** Live attachment URLs in the message, in order. Used to bind file
+     * hashes into the v3 canonical signed body so an image swap breaks
+     * the signature. Empty array means text-only verify. */
+    attachmentUrls: string[];
+}
+
+/**
+ * Cache of SHA-256 hex hashes keyed by attachment URL. Discord CDN URLs
+ * are content-addressable in practice (same content → same URL), so a
+ * URL-keyed cache rarely collides. Soft TTL keeps memory bounded.
+ */
+const ATTACHMENT_HASH_TTL_MS = 30 * 60 * 1000;
+const attachmentHashCache = new Map<string, { hex: string; ts: number; }>();
+
+async function hashAttachmentByUrl(url: string): Promise<string | null> {
+    const cached = attachmentHashCache.get(url);
+    if (cached && Date.now() - cached.ts < ATTACHMENT_HASH_TTL_MS) return cached.hex;
+    try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        const hex = await cryptoService.sha256Hex(bytes);
+        attachmentHashCache.set(url, { hex, ts: Date.now() });
+        return hex;
+    } catch {
+        return null;
+    }
+}
+
+async function hashAllAttachments(urls: string[]): Promise<CanonicalAttachment[] | null> {
+    if (urls.length === 0) return [];
+    const out: CanonicalAttachment[] = [];
+    for (const url of urls) {
+        if (!url) return null;
+        const hex = await hashAttachmentByUrl(url);
+        if (!hex) return null;
+        out.push({ sha256Hex: hex });
+    }
+    return out;
 }
 
 function fnv1a32(str: string): string {
@@ -71,9 +110,10 @@ function fnv1a32(str: string): string {
     return hash.toString(16).padStart(8, "0");
 }
 
-function lookupKey({ sigRef, discordMessageId, authorId, strippedContent }: LookupInput): string | null {
-    if (sigRef.v === 2) return sigRef.id ? `v2:${sigRef.id}:${authorId ?? ""}` : null;
-    if (discordMessageId) return `v3:${discordMessageId}:${authorId ?? ""}:${fnv1a32(strippedContent)}`;
+function lookupKey({ sigRef, discordMessageId, authorId, strippedContent, attachmentUrls }: LookupInput): string | null {
+    const attFp = fnv1a32(attachmentUrls.join("|"));
+    if (sigRef.v === 2) return sigRef.id ? `v2:${sigRef.id}:${authorId ?? ""}:${attFp}` : null;
+    if (discordMessageId) return `v3:${discordMessageId}:${authorId ?? ""}:${fnv1a32(strippedContent)}:${attFp}`;
     return null;
 }
 
@@ -140,12 +180,28 @@ async function computeFlairState(
             const createdAt = typeof raw.createdAt === "number" ? raw.createdAt : null;
             if (!publicKey || !signature) return "unverified";
 
-            const signedBody =
-                input.sigRef.v === 2 && typeof raw.message === "string"
-                    ? raw.message
-                    : input.strippedContent;
-
-            const sigOk = await cryptoService.verify(signedBody, signature, publicKey);
+            // v2 records ship the canonical body in `raw.message`. v3
+            // reconstructs it live from the message content and (if any)
+            // attachment hashes. For v3 we also fall back to the
+            // text-only canonical so messages signed by older clients
+            // that didn't bind attachments still verify, just without
+            // the file-binding guarantee.
+            let sigOk = false;
+            if (input.sigRef.v === 2 && typeof raw.message === "string") {
+                sigOk = await cryptoService.verify(raw.message, signature, publicKey);
+            } else {
+                if (input.attachmentUrls.length > 0) {
+                    const hashes = await hashAllAttachments(input.attachmentUrls);
+                    if (hashes) {
+                        const canonical = VeilSignedBody.buildCanonicalSignedBody(input.strippedContent, hashes);
+                        sigOk = await cryptoService.verify(canonical, signature, publicKey);
+                    }
+                }
+                if (!sigOk) {
+                    const legacy = VeilSignedBody.buildCanonicalSignedBody(input.strippedContent, []);
+                    sigOk = await cryptoService.verify(legacy, signature, publicKey);
+                }
+            }
             if (!sigOk) return "invalid";
 
             if (!input.authorId || createdAt == null) return "signed";
@@ -237,6 +293,9 @@ export function VeilSigBadge({ message }: { message: any; }) {
     const authorId: string | null = message?.author?.id ?? null;
     const discordMessageId: string | null = typeof message?.id === "string" ? message.id : null;
     const strippedContent = stripZwc(typeof message?.content === "string" ? message.content : "");
+    const attachmentUrls: string[] = Array.isArray(message?.attachments)
+        ? message.attachments.map((a: any) => (typeof a?.url === "string" ? a.url : "")).filter(Boolean)
+        : [];
 
     const timestamp = (() => {
         const t = message?.timestamp;
@@ -251,7 +310,7 @@ export function VeilSigBadge({ message }: { message: any; }) {
         }
     })();
 
-    const input: LookupInput = { sigRef: ref, discordMessageId, strippedContent, authorId };
+    const input: LookupInput = { sigRef: ref, discordMessageId, strippedContent, authorId, attachmentUrls };
     const cacheKey = lookupKey(input);
 
     const [state, setState] = useState<FlairState>(() => {
@@ -287,7 +346,7 @@ export function VeilSigBadge({ message }: { message: any; }) {
             cancelled = true;
             window.removeEventListener(REGISTERED_EVENT, onRegistered as EventListener);
         };
-    }, [ref.v, ref.id, discordMessageId, authorId, strippedContent]);
+    }, [ref.v, ref.id, discordMessageId, authorId, strippedContent, attachmentUrls.join("|")]);
 
     const meta = FLAIR_META[state];
 
@@ -367,6 +426,7 @@ export function VeilSigBadge({ message }: { message: any; }) {
                         sigRef={ref}
                         discordMessageId={discordMessageId}
                         strippedContent={strippedContent}
+                        attachmentUrls={attachmentUrls}
                         authorTag={authorTag}
                         timestamp={timestamp}
                     />

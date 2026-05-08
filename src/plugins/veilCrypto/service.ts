@@ -1100,6 +1100,70 @@ export class CryptoService {
             return false;
         }
     }
+
+    /**
+     * Encrypt a raw attachment blob with a fresh AES-GCM-256 key. The
+     * returned `key` and `iv` travel inside the multi-recipient content
+     * envelope (as part of the JSON manifest) so only intended recipients
+     * can decrypt the bytes. The ciphertext is what gets uploaded to
+     * Discord's CDN.
+     */
+    async encryptAttachmentBytes(plaintextBytes: Uint8Array): Promise<{
+        ciphertext: Uint8Array;
+        key: Uint8Array;
+        iv: Uint8Array;
+    }> {
+        const key = crypto.getRandomValues(new Uint8Array(32));
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const aesKey = await crypto.subtle.importKey(
+            "raw",
+            key as BufferSource,
+            { name: "AES-GCM", length: 256 },
+            false,
+            ["encrypt"]
+        );
+        const ct = new Uint8Array(await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv: iv as BufferSource },
+            aesKey,
+            plaintextBytes as BufferSource
+        ));
+        return { ciphertext: ct, key, iv };
+    }
+
+    /**
+     * Decrypt an attachment blob with the per-attachment key and IV the
+     * sender packed into the message manifest.
+     */
+    async decryptAttachmentBytes(
+        ciphertext: Uint8Array,
+        key: Uint8Array,
+        iv: Uint8Array
+    ): Promise<Uint8Array> {
+        const aesKey = await crypto.subtle.importKey(
+            "raw",
+            key as BufferSource,
+            { name: "AES-GCM", length: 256 },
+            false,
+            ["decrypt"]
+        );
+        return new Uint8Array(await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: iv as BufferSource },
+            aesKey,
+            ciphertext as BufferSource
+        ));
+    }
+
+    /**
+     * SHA-256 of arbitrary bytes, returned as a lowercase hex string.
+     * Used by the signed-message flow to bind attachments to the
+     * signature canonical body.
+     */
+    async sha256Hex(bytes: Uint8Array): Promise<string> {
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource));
+        let s = "";
+        for (let i = 0; i < digest.length; i++) s += digest[i].toString(16).padStart(2, "0");
+        return s;
+    }
 }
 
 export const cryptoService = new CryptoService();

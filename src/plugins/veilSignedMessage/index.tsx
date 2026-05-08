@@ -10,19 +10,19 @@ import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 import { FluxDispatcher, showToast, Toasts, useEffect, UserStore, useState } from "@webpack/common";
 
-import { cryptoService, veilApiBase, VeilZwc } from "@plugins/veilCrypto";
+import { CanonicalAttachment, cryptoService, veilApiBase, VeilSignedBody, VeilZwc } from "@plugins/veilCrypto";
 import { SignIcon } from "./SignIcon";
 
-// veil v0.0.1
+// veil v0.0.2
 
 const BUTTON_ID = "veil-sign";
 
 let lastEnabled = false;
 
 interface Pending {
-    /** Final Discord content (signed body + ZWC marker) — used to match the MESSAGE_CREATE event. */
+    /** Final Discord content (visible body + ZWC marker) — used to match the MESSAGE_CREATE event. */
     matchContent: string;
-    /** Body the signature was computed over (no ZWC trailer). */
+    /** Canonical body the signature was computed over. Includes attachment hashes when present. */
     signedBody: string;
     publicKey: string;
     signature: string;
@@ -116,9 +116,13 @@ function onMessageCreate(event: any) {
         });
 }
 
-const sendListener: MessageSendListener = async (channelId, messageObj) => {
+const sendListener: MessageSendListener = async (channelId, messageObj, options) => {
     if (!lastEnabled) return;
-    if (!messageObj || typeof messageObj.content !== "string" || messageObj.content.length === 0) return;
+    if (!messageObj) return;
+
+    const text = typeof messageObj.content === "string" ? messageObj.content : "";
+    const uploads: any[] = (options as any)?.uploads ?? [];
+    if (text.length === 0 && uploads.length === 0) return;
 
     try {
         if (!await cryptoService.hasStoredKey()) {
@@ -126,11 +130,29 @@ const sendListener: MessageSendListener = async (channelId, messageObj) => {
             showToast("Sign mode off: link a Veil key first.", Toasts.Type.FAILURE);
             return { cancel: true };
         }
+
+        // Hash every attachment's plaintext bytes so the signature
+        // binds the file content the sender saw, not what the CDN
+        // happens to serve later. Order matches `options.uploads`,
+        // which Discord forwards as `message.attachments` in the same
+        // order at MESSAGE_CREATE time on the receiver.
+        const attachmentHashes: CanonicalAttachment[] = [];
+        for (const upload of uploads) {
+            const file: File | undefined = upload?.item?.file;
+            if (!file) {
+                showToast("Sign mode: couldn't read an attachment to hash it.", Toasts.Type.FAILURE);
+                return { cancel: true };
+            }
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            const sha256Hex = await cryptoService.sha256Hex(bytes);
+            attachmentHashes.push({ sha256Hex });
+        }
+
         const publicKey = await cryptoService.getPublicKey();
-        const signedContent = messageObj.content;
-        const signature = await cryptoService.sign(signedContent);
+        const canonicalBody = VeilSignedBody.buildCanonicalSignedBody(text, attachmentHashes);
+        const signature = await cryptoService.sign(canonicalBody);
         const marker = VeilZwc.encodeMarker();
-        const finalContent = signedContent + marker;
+        const finalContent = text + marker;
 
         if (finalContent.length > 2000) {
             showToast(`Sign mode: message is too long by ${finalContent.length - 2000} chars.`, Toasts.Type.FAILURE);
@@ -141,7 +163,7 @@ const sendListener: MessageSendListener = async (channelId, messageObj) => {
 
         pushPending(channelId, {
             matchContent: finalContent,
-            signedBody: signedContent,
+            signedBody: canonicalBody,
             publicKey,
             signature,
             expiresAt: Date.now() + PENDING_TTL_MS
