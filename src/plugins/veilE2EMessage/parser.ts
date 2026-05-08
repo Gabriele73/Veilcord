@@ -11,7 +11,12 @@ const BODY_REGEX = /^🔒 ([A-Za-z0-9_-]+)\nThis message was encrypted with Veil
 
 const E2E_ENVELOPE_MAGIC_0 = 0x56;
 const E2E_ENVELOPE_MAGIC_1 = 0xE2;
-const E2E_ENVELOPE_VERSION = 0x01;
+const E2E_ENVELOPE_VERSION = 0x02;
+
+// Minimum v2 envelope = header (48) + one slot (48) + payload tag (16).
+// Anything shorter is definitely not a valid envelope, so we cheaply
+// reject before handing off to the service for the real parse.
+const E2E_MIN_ENVELOPE_BYTES = 1 + 2 + 32 + 12 + 1 + 48 + 16;
 
 function bytesToBase64Url(bytes: Uint8Array): string {
     let binary = "";
@@ -50,7 +55,7 @@ export function decodeEnvelopeBody(content: unknown): ParsedEnvelopeBody | null 
     const match = BODY_REGEX.exec(content);
     if (!match) return null;
     const envelope = base64UrlToBytes(match[1]);
-    if (!envelope || envelope.length < 1 + 2 + 4 + 32 + 12 + 16) return null;
+    if (!envelope || envelope.length < E2E_MIN_ENVELOPE_BYTES) return null;
     if (envelope[0] !== E2E_ENVELOPE_VERSION) return null;
     if (envelope[1] !== E2E_ENVELOPE_MAGIC_0) return null;
     if (envelope[2] !== E2E_ENVELOPE_MAGIC_1) return null;

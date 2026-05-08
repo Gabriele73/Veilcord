@@ -10,7 +10,7 @@ import { addMessagePreSendListener, MessageSendListener, removeMessagePreSendLis
 import { cryptoService, getActiveBindingForUid, VeilX25519 } from "@plugins/veilCrypto";
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { ChannelStore, FluxDispatcher, showToast, Toasts, useEffect, UserStore, useState } from "@webpack/common";
+import { ChannelStore, showToast, Toasts, useEffect, UserStore, useState } from "@webpack/common";
 
 import { E2eDecoration } from "./Decoration";
 import { LockIcon } from "./LockIcon";
@@ -21,23 +21,8 @@ import managedStyle from "./style.css?managed";
 
 const BUTTON_ID = "veil-e2e";
 const ACCESSORY_ID = "veil-e2e-accessory";
-const PENDING_TTL_MS = 30_000;
-const OWN_PLAINTEXT_TTL_MS = 30 * 60 * 1000;
 
 const enabledByChannel = new Map<string, boolean>();
-
-interface Pending {
-    matchContent: string;
-    plaintext: string;
-    expiresAt: number;
-}
-const pendingByChannel = new Map<string, Pending[]>();
-
-interface OwnPlaintextEntry {
-    plaintext: string;
-    expiresAt: number;
-}
-const ownPlaintextByMessageId = new Map<string, OwnPlaintextEntry>();
 
 function setEnabled(channelId: string, value: boolean) {
     if (value) enabledByChannel.set(channelId, true);
@@ -49,67 +34,6 @@ function setEnabled(channelId: string, value: boolean) {
 
 function isEnabled(channelId: string): boolean {
     return enabledByChannel.get(channelId) === true;
-}
-
-function pushPending(channelId: string, entry: Pending) {
-    const queue = pendingByChannel.get(channelId) ?? [];
-    const fresh = queue.filter(e => e.expiresAt > Date.now());
-    fresh.push(entry);
-    pendingByChannel.set(channelId, fresh);
-}
-
-function takeMatchingPending(channelId: string, content: string): Pending | null {
-    const queue = pendingByChannel.get(channelId);
-    if (!queue?.length) return null;
-    const now = Date.now();
-    for (let i = 0; i < queue.length; i++) {
-        const entry = queue[i];
-        if (entry.expiresAt <= now) continue;
-        if (entry.matchContent === content) {
-            queue.splice(i, 1);
-            if (queue.length === 0) pendingByChannel.delete(channelId);
-            return entry;
-        }
-    }
-    return null;
-}
-
-function rememberOwnPlaintext(discordMessageId: string, plaintext: string) {
-    ownPlaintextByMessageId.set(discordMessageId, {
-        plaintext,
-        expiresAt: Date.now() + OWN_PLAINTEXT_TTL_MS
-    });
-}
-
-function getOwnPlaintext(discordMessageId: string): string | null {
-    const entry = ownPlaintextByMessageId.get(discordMessageId);
-    if (!entry) return null;
-    if (entry.expiresAt <= Date.now()) {
-        ownPlaintextByMessageId.delete(discordMessageId);
-        return null;
-    }
-    return entry.plaintext;
-}
-
-function onMessageCreate(event: any) {
-    if (!event || event.optimistic) return;
-    const message = event.message;
-    if (!message || typeof message.id !== "string" || typeof message.content !== "string") return;
-    const channelId = event.channelId ?? message.channel_id;
-    if (typeof channelId !== "string") return;
-
-    const me = UserStore.getCurrentUser?.();
-    if (!me || message.author?.id !== me.id) return;
-
-    const pending = takeMatchingPending(channelId, message.content);
-    if (!pending) return;
-
-    rememberOwnPlaintext(message.id, pending.plaintext);
-    try {
-        window.dispatchEvent(new CustomEvent("veil-e2e:own-plaintext", {
-            detail: { discordMessageId: message.id }
-        }));
-    } catch { /* ignore */ }
 }
 
 const sendListener: MessageSendListener = async (channelId, messageObj) => {
@@ -151,8 +75,9 @@ const sendListener: MessageSendListener = async (channelId, messageObj) => {
         }
 
         const plaintext = messageObj.content;
-        const envelope = await cryptoService.encryptForRecipient(
-            binding.publicKey,
+        const ourPub = await cryptoService.getPublicKey();
+        const envelope = await cryptoService.encryptForRecipients(
+            [binding.publicKey, ourPub],
             plaintext,
             { senderUid: me.id, recipientUid, channelId }
         );
@@ -167,11 +92,6 @@ const sendListener: MessageSendListener = async (channelId, messageObj) => {
         }
 
         messageObj.content = finalContent;
-        pushPending(channelId, {
-            matchContent: finalContent,
-            plaintext,
-            expiresAt: Date.now() + PENDING_TTL_MS
-        });
     } catch (e: any) {
         showToast(`E2E failed: ${e?.message || e}`, Toasts.Type.FAILURE);
         return { cancel: true };
@@ -257,7 +177,7 @@ function hasE2eContent(message: any): boolean {
 function E2eAccessoryHost(props: any) {
     const message = props?.message;
     if (!hasE2eContent(message)) return null;
-    return <E2eDecoration message={message} getOwnPlaintext={getOwnPlaintext} />;
+    return <E2eDecoration message={message} />;
 }
 
 export default definePlugin({
@@ -272,17 +192,13 @@ export default definePlugin({
     start() {
         addChatBarButton(BUTTON_ID, VeilE2EButton, LockIcon);
         addMessagePreSendListener(sendListener);
-        FluxDispatcher.subscribe("MESSAGE_CREATE", onMessageCreate);
         addMessageAccessory(ACCESSORY_ID, E2eAccessoryHost, -1);
     },
 
     stop() {
         removeChatBarButton(BUTTON_ID);
         removeMessagePreSendListener(sendListener);
-        FluxDispatcher.unsubscribe("MESSAGE_CREATE", onMessageCreate);
         removeMessageAccessory(ACCESSORY_ID);
-        pendingByChannel.clear();
-        ownPlaintextByMessageId.clear();
         enabledByChannel.clear();
     }
 });

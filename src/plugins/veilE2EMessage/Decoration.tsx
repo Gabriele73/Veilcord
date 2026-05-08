@@ -13,7 +13,6 @@ type DecryptState = "loading" | "decrypted" | "locked-out" | "failed" | "vault-l
 
 interface E2eDecorationProps {
     message: any;
-    getOwnPlaintext: (discordMessageId: string) => string | null;
 }
 
 const FLAIR_META: Record<DecryptState, { className: string; label: string; tooltip: string; }> = {
@@ -66,7 +65,7 @@ function StateGlyph({ state }: { state: DecryptState; }) {
     );
 }
 
-export function E2eDecoration({ message, getOwnPlaintext }: E2eDecorationProps) {
+export function E2eDecoration({ message }: E2eDecorationProps) {
     const parsed = decodeEnvelopeBody(message?.content);
     if (!parsed) return null;
 
@@ -90,20 +89,6 @@ export function E2eDecoration({ message, getOwnPlaintext }: E2eDecorationProps) 
             if (!me) {
                 if (!cancelled) setState("vault-locked");
                 return;
-            }
-
-            // Fast path: our own outgoing message — use the plaintext we
-            // captured from the pre-send listener so we don't ask the
-            // vault to decrypt something we already have.
-            if (authorId === me.id) {
-                const cached = getOwnPlaintext(discordMessageId);
-                if (cached != null) {
-                    if (!cancelled) {
-                        setPlaintext(cached);
-                        setState("decrypted");
-                    }
-                    return;
-                }
             }
 
             if (!(await cryptoService.hasStoredKey())) {
@@ -144,18 +129,11 @@ export function E2eDecoration({ message, getOwnPlaintext }: E2eDecorationProps) 
 
         void run();
 
-        const onOwnPlaintext = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (!detail || detail.discordMessageId !== discordMessageId) return;
-            void run();
-        };
         const onStateChange = () => { void run(); };
-        window.addEventListener("veil-e2e:own-plaintext", onOwnPlaintext as EventListener);
         window.addEventListener("veilcrypto:state-change", onStateChange as EventListener);
 
         return () => {
             cancelled = true;
-            window.removeEventListener("veil-e2e:own-plaintext", onOwnPlaintext as EventListener);
             window.removeEventListener("veilcrypto:state-change", onStateChange as EventListener);
         };
     }, [discordMessageId, channelId, authorId, parsed.base64]);

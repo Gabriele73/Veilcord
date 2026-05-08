@@ -28,14 +28,42 @@ import {
     isAvailable as isX25519Available
 } from "./x25519";
 
-const E2E_ENVELOPE_VERSION = 0x01;
+/*
+ * Multi-recipient envelope (v2).
+ *
+ * A single random AES-128 content key K encrypts the plaintext once.
+ * For every recipient (in 1:1 DMs that's [the other user, ourselves])
+ * we attach a slot that wraps K with a key derived from
+ * `HKDF(ECDH(eph_priv, slot_static_x25519_pub))`. Either party can
+ * unwrap by computing `ECDH(my_static_x25519_priv, eph_pub)` and
+ * picking their own slot by 4-byte fingerprint.
+ *
+ *   [ver=2 :1B][magic 0x56 0xE2 :2B]
+ *   [eph_pub :32B][payload_iv :12B][n_slots :1B]
+ *   slot[0..n_slots-1] each 48B:
+ *       [fpr :4B][wrap_iv :12B][wrapped_K + GCM_tag :32B]
+ *   [ciphertext + GCM_tag :N+16B]
+ *
+ * Both wrap and payload AEADs bind to context-specific AAD so slot
+ * substitution and cross-channel replay both fail to decrypt.
+ */
+const E2E_ENVELOPE_VERSION = 0x02;
 const E2E_ENVELOPE_MAGIC = new Uint8Array([0x56, 0xE2]);
 const E2E_FPR_BYTES = 4;
 const E2E_EPH_PUB_BYTES = 32;
-const E2E_IV_BYTES = 12;
+const E2E_PAYLOAD_IV_BYTES = 12;
+const E2E_WRAP_IV_BYTES = 12;
+const E2E_CONTENT_KEY_BYTES = 16;
 const E2E_AEAD_TAG_BYTES = 16;
-const E2E_HEADER_BYTES = 1 + E2E_ENVELOPE_MAGIC.length + E2E_FPR_BYTES + E2E_EPH_PUB_BYTES + E2E_IV_BYTES;
-const E2E_MIN_ENVELOPE_BYTES = E2E_HEADER_BYTES + E2E_AEAD_TAG_BYTES;
+const E2E_WRAPPED_KEY_BYTES = E2E_CONTENT_KEY_BYTES + E2E_AEAD_TAG_BYTES;
+const E2E_SLOT_BYTES = E2E_FPR_BYTES + E2E_WRAP_IV_BYTES + E2E_WRAPPED_KEY_BYTES;
+const E2E_HEADER_BYTES = 1 + E2E_ENVELOPE_MAGIC.length + E2E_EPH_PUB_BYTES + E2E_PAYLOAD_IV_BYTES + 1;
+const E2E_MIN_ENVELOPE_BYTES = E2E_HEADER_BYTES + E2E_SLOT_BYTES + E2E_AEAD_TAG_BYTES;
+const E2E_MAX_SLOTS = 16;
+
+const PAYLOAD_AAD_TAG = new TextEncoder().encode("veil-e2e-dm/v2-payload\n");
+const SLOT_AAD_TAG = new TextEncoder().encode("veil-e2e-dm/v2-slot\n");
+const SLOT_HKDF_TAG = new TextEncoder().encode("veil-e2e-dm/v2-wrap\n");
 
 export interface VeilE2eContext {
     senderUid: string;
@@ -43,9 +71,49 @@ export interface VeilE2eContext {
     channelId: string;
 }
 
-function buildE2eAad(ctx: VeilE2eContext): Uint8Array {
-    const s = `veil-e2e-dm/v1\n${ctx.senderUid}\n${ctx.recipientUid}\n${ctx.channelId}`;
-    return new TextEncoder().encode(s);
+interface E2eSlot {
+    fpr: Uint8Array;
+    wrapIv: Uint8Array;
+    wrapped: Uint8Array;
+}
+
+interface ParsedE2eEnvelope {
+    ephPub: Uint8Array;
+    payloadIv: Uint8Array;
+    slots: E2eSlot[];
+    payload: Uint8Array;
+}
+
+function buildE2ePayloadAad(ctx: VeilE2eContext): Uint8Array {
+    const s = `${ctx.senderUid}\n${ctx.recipientUid}\n${ctx.channelId}`;
+    const body = new TextEncoder().encode(s);
+    const out = new Uint8Array(PAYLOAD_AAD_TAG.length + body.length);
+    out.set(PAYLOAD_AAD_TAG, 0);
+    out.set(body, PAYLOAD_AAD_TAG.length);
+    return out;
+}
+
+function buildE2eSlotAad(ephPub: Uint8Array, slotFpr: Uint8Array): Uint8Array {
+    const out = new Uint8Array(SLOT_AAD_TAG.length + ephPub.length + slotFpr.length);
+    out.set(SLOT_AAD_TAG, 0);
+    out.set(ephPub, SLOT_AAD_TAG.length);
+    out.set(slotFpr, SLOT_AAD_TAG.length + ephPub.length);
+    return out;
+}
+
+function buildSlotHkdfInfo(ephPub: Uint8Array, slotFpr: Uint8Array): Uint8Array {
+    const out = new Uint8Array(SLOT_HKDF_TAG.length + ephPub.length + slotFpr.length);
+    out.set(SLOT_HKDF_TAG, 0);
+    out.set(ephPub, SLOT_HKDF_TAG.length);
+    out.set(slotFpr, SLOT_HKDF_TAG.length + ephPub.length);
+    return out;
+}
+
+function bytesEqualConstantTime(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+    return diff === 0;
 }
 
 async function fingerprintPubkey(ed25519PubHex: string): Promise<Uint8Array> {
@@ -54,7 +122,11 @@ async function fingerprintPubkey(ed25519PubHex: string): Promise<Uint8Array> {
     return digest.slice(0, E2E_FPR_BYTES);
 }
 
-async function deriveE2eAesKey(sharedSecret: Uint8Array, info: Uint8Array): Promise<CryptoKey> {
+async function deriveSlotWrapKey(
+    sharedSecret: Uint8Array,
+    ephPub: Uint8Array,
+    slotFpr: Uint8Array
+): Promise<CryptoKey> {
     const baseKey = await crypto.subtle.importKey(
         "raw",
         sharedSecret as BufferSource,
@@ -67,13 +139,50 @@ async function deriveE2eAesKey(sharedSecret: Uint8Array, info: Uint8Array): Prom
             name: "HKDF",
             hash: "SHA-256",
             salt: new Uint8Array(0) as BufferSource,
-            info: info as BufferSource
+            info: buildSlotHkdfInfo(ephPub, slotFpr) as BufferSource
         },
         baseKey,
-        { name: "AES-GCM", length: 256 },
+        { name: "AES-GCM", length: E2E_CONTENT_KEY_BYTES * 8 },
         false,
         ["encrypt", "decrypt"]
     );
+}
+
+function parseE2eEnvelope(envelope: Uint8Array): ParsedE2eEnvelope | null {
+    if (!(envelope instanceof Uint8Array)) return null;
+    if (envelope.length < E2E_MIN_ENVELOPE_BYTES) return null;
+
+    let o = 0;
+    if (envelope[o++] !== E2E_ENVELOPE_VERSION) return null;
+    if (envelope[o++] !== E2E_ENVELOPE_MAGIC[0]) return null;
+    if (envelope[o++] !== E2E_ENVELOPE_MAGIC[1]) return null;
+
+    const ephPub = envelope.slice(o, o + E2E_EPH_PUB_BYTES);
+    o += E2E_EPH_PUB_BYTES;
+    const payloadIv = envelope.slice(o, o + E2E_PAYLOAD_IV_BYTES);
+    o += E2E_PAYLOAD_IV_BYTES;
+
+    const nSlots = envelope[o++];
+    if (nSlots === 0 || nSlots > E2E_MAX_SLOTS) return null;
+
+    const slotsTotalBytes = nSlots * E2E_SLOT_BYTES;
+    if (envelope.length < o + slotsTotalBytes + E2E_AEAD_TAG_BYTES) return null;
+
+    const slots: E2eSlot[] = [];
+    for (let i = 0; i < nSlots; i++) {
+        const fpr = envelope.slice(o, o + E2E_FPR_BYTES);
+        o += E2E_FPR_BYTES;
+        const wrapIv = envelope.slice(o, o + E2E_WRAP_IV_BYTES);
+        o += E2E_WRAP_IV_BYTES;
+        const wrapped = envelope.slice(o, o + E2E_WRAPPED_KEY_BYTES);
+        o += E2E_WRAPPED_KEY_BYTES;
+        slots.push({ fpr, wrapIv, wrapped });
+    }
+
+    const payload = envelope.slice(o);
+    if (payload.length < E2E_AEAD_TAG_BYTES) return null;
+
+    return { ephPub, payloadIv, slots, payload };
 }
 
 export class CryptoService {
@@ -818,15 +927,21 @@ export class CryptoService {
     }
 
     /**
-     * Encrypt `plaintext` to the holder of `recipientEd25519PubHex`. The
-     * result is an opaque byte envelope that carries the sender's
-     * ephemeral X25519 public key, a random IV, and AES-256-GCM
-     * ciphertext bound to the sender/recipient/channel triple via HKDF
-     * `info` and the AEAD additional-data. Nothing in the envelope is
-     * secret on its own — the long-term secrets stay in the vault.
+     * Encrypt `plaintext` to one or more Ed25519 recipients. In a 1:1
+     * DM the caller passes `[theirPubHex, ourPubHex]` so both parties
+     * can decrypt later (the sender reads their own messages on echo
+     * and across reloads via the same code path the recipient uses).
+     *
+     * Layout: a fresh ephemeral X25519 keypair is generated; a random
+     * 16-byte content key K encrypts the plaintext under AES-128-GCM
+     * with AAD bound to `senderUid || recipientUid || channelId`; for
+     * every recipient pubkey we attach a slot that wraps K with a key
+     * derived via `HKDF(ECDH(eph_priv, slot_static_pub))`. Slots are
+     * deduped by fingerprint so passing `[A, A]` produces a single
+     * slot.
      */
-    async encryptForRecipient(
-        recipientEd25519PubHex: string,
+    async encryptForRecipients(
+        recipientEd25519PubHexes: string[],
         plaintext: string,
         ctx: VeilE2eContext
     ): Promise<Uint8Array> {
@@ -834,31 +949,78 @@ export class CryptoService {
         if (!(await isX25519Available())) {
             throw new Error("This Discord build doesn't support X25519 end-to-end crypto.");
         }
+        if (!Array.isArray(recipientEd25519PubHexes) || recipientEd25519PubHexes.length === 0) {
+            throw new Error("Need at least one recipient public key");
+        }
 
-        const recipientX25519Pub = ed25519PubToX25519(recipientEd25519PubHex);
+        // Dedupe by fingerprint (catches `[recipient, ourselves]` when
+        // the active key happens to also be the recipient, and the
+        // hypothetical note-to-self DM).
+        const slotInputs: { fpr: Uint8Array; pubHex: string; }[] = [];
+        const seenFpr = new Set<string>();
+        for (const pub of recipientEd25519PubHexes) {
+            if (typeof pub !== "string" || !pub) continue;
+            const fpr = await fingerprintPubkey(pub);
+            const fprKey = bytesToBase64(fpr);
+            if (seenFpr.has(fprKey)) continue;
+            seenFpr.add(fprKey);
+            slotInputs.push({ fpr, pubHex: pub });
+        }
+        if (slotInputs.length === 0) throw new Error("No valid recipient public keys");
+        if (slotInputs.length > E2E_MAX_SLOTS) {
+            throw new Error(`Too many recipients (max ${E2E_MAX_SLOTS})`);
+        }
+
         const { privSeed: ephPriv, rawPub: ephPub } = await generateEphemeralX25519();
-        const sharedSecret = await deriveSharedBits(ephPriv, recipientX25519Pub);
 
-        const aad = buildE2eAad(ctx);
-        const aesKey = await deriveE2eAesKey(sharedSecret, aad);
+        const contentKeyBytes = crypto.getRandomValues(new Uint8Array(E2E_CONTENT_KEY_BYTES));
+        const contentKey = await crypto.subtle.importKey(
+            "raw",
+            contentKeyBytes as BufferSource,
+            { name: "AES-GCM", length: E2E_CONTENT_KEY_BYTES * 8 },
+            false,
+            ["encrypt"]
+        );
 
-        const iv = crypto.getRandomValues(new Uint8Array(E2E_IV_BYTES));
-        const encoded = new TextEncoder().encode(plaintext);
+        const payloadAad = buildE2ePayloadAad(ctx);
+        const payloadIv = crypto.getRandomValues(new Uint8Array(E2E_PAYLOAD_IV_BYTES));
         const ciphertextAndTag = new Uint8Array(await crypto.subtle.encrypt(
-            { name: "AES-GCM", iv: iv as BufferSource, additionalData: aad as BufferSource },
-            aesKey,
-            encoded as BufferSource
+            { name: "AES-GCM", iv: payloadIv as BufferSource, additionalData: payloadAad as BufferSource },
+            contentKey,
+            new TextEncoder().encode(plaintext) as BufferSource
         ));
 
-        const fpr = await fingerprintPubkey(recipientEd25519PubHex);
+        const wrappedSlots: Uint8Array[] = [];
+        for (const { fpr, pubHex } of slotInputs) {
+            const recipientX25519Pub = ed25519PubToX25519(pubHex);
+            const sharedSecret = await deriveSharedBits(ephPriv, recipientX25519Pub);
+            const wrapKey = await deriveSlotWrapKey(sharedSecret, ephPub, fpr);
+            const wrapIv = crypto.getRandomValues(new Uint8Array(E2E_WRAP_IV_BYTES));
+            const wrapAad = buildE2eSlotAad(ephPub, fpr);
+            const wrapped = new Uint8Array(await crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: wrapIv as BufferSource, additionalData: wrapAad as BufferSource },
+                wrapKey,
+                contentKeyBytes as BufferSource
+            ));
+            const slot = new Uint8Array(E2E_SLOT_BYTES);
+            let so = 0;
+            slot.set(fpr, so); so += E2E_FPR_BYTES;
+            slot.set(wrapIv, so); so += E2E_WRAP_IV_BYTES;
+            slot.set(wrapped, so);
+            wrappedSlots.push(slot);
+        }
 
-        const envelope = new Uint8Array(E2E_HEADER_BYTES + ciphertextAndTag.length);
+        const envelopeSize = E2E_HEADER_BYTES + wrappedSlots.length * E2E_SLOT_BYTES + ciphertextAndTag.length;
+        const envelope = new Uint8Array(envelopeSize);
         let o = 0;
         envelope[o++] = E2E_ENVELOPE_VERSION;
         envelope.set(E2E_ENVELOPE_MAGIC, o); o += E2E_ENVELOPE_MAGIC.length;
-        envelope.set(fpr, o); o += E2E_FPR_BYTES;
         envelope.set(ephPub, o); o += E2E_EPH_PUB_BYTES;
-        envelope.set(iv, o); o += E2E_IV_BYTES;
+        envelope.set(payloadIv, o); o += E2E_PAYLOAD_IV_BYTES;
+        envelope[o++] = wrappedSlots.length;
+        for (const slot of wrappedSlots) {
+            envelope.set(slot, o); o += E2E_SLOT_BYTES;
+        }
         envelope.set(ciphertextAndTag, o);
 
         return envelope;
@@ -867,8 +1029,8 @@ export class CryptoService {
     /**
      * Try to decrypt an E2E envelope with the current active private
      * key. Returns the plaintext on success, or `null` for any failure
-     * mode (wrong recipient, bad magic, tampered ciphertext, locked
-     * vault). Never throws — the receiver decorator calls this on every
+     * mode (no slot for our key, bad magic, tampered ciphertext, locked
+     * vault). Never throws — the receiver decorator runs this on every
      * candidate message and a throw would poison the message list.
      */
     async tryDecryptFromSender(
@@ -879,34 +1041,40 @@ export class CryptoService {
             await this._ensureInitialized();
             if (!this._activePrivateKeyHex) return null;
             if (!(await isX25519Available())) return null;
-            if (!(envelope instanceof Uint8Array) || envelope.length < E2E_MIN_ENVELOPE_BYTES) return null;
 
-            let o = 0;
-            if (envelope[o++] !== E2E_ENVELOPE_VERSION) return null;
-            if (envelope[o++] !== E2E_ENVELOPE_MAGIC[0]) return null;
-            if (envelope[o++] !== E2E_ENVELOPE_MAGIC[1]) return null;
-
-            const envelopeFpr = envelope.slice(o, o + E2E_FPR_BYTES); o += E2E_FPR_BYTES;
-            const ephPub = envelope.slice(o, o + E2E_EPH_PUB_BYTES); o += E2E_EPH_PUB_BYTES;
-            const iv = envelope.slice(o, o + E2E_IV_BYTES); o += E2E_IV_BYTES;
-            const ct = envelope.slice(o);
+            const parsed = parseE2eEnvelope(envelope);
+            if (!parsed) return null;
 
             const ourPub = await this.getPublicKey();
             const ourFpr = await fingerprintPubkey(ourPub);
-            for (let i = 0; i < E2E_FPR_BYTES; i++) {
-                if (envelopeFpr[i] !== ourFpr[i]) return null;
-            }
+            const matchingSlot = parsed.slots.find(slot => bytesEqualConstantTime(slot.fpr, ourFpr));
+            if (!matchingSlot) return null;
 
             const myX25519Priv = await ed25519PrivToX25519(this._activePrivateKeyHex);
-            const sharedSecret = await deriveSharedBits(myX25519Priv, ephPub);
+            const sharedSecret = await deriveSharedBits(myX25519Priv, parsed.ephPub);
+            const wrapKey = await deriveSlotWrapKey(sharedSecret, parsed.ephPub, matchingSlot.fpr);
+            const wrapAad = buildE2eSlotAad(parsed.ephPub, matchingSlot.fpr);
 
-            const aad = buildE2eAad(ctx);
-            const aesKey = await deriveE2eAesKey(sharedSecret, aad);
+            const contentKeyBytes = new Uint8Array(await crypto.subtle.decrypt(
+                { name: "AES-GCM", iv: matchingSlot.wrapIv as BufferSource, additionalData: wrapAad as BufferSource },
+                wrapKey,
+                matchingSlot.wrapped as BufferSource
+            ));
+            if (contentKeyBytes.length !== E2E_CONTENT_KEY_BYTES) return null;
 
+            const contentKey = await crypto.subtle.importKey(
+                "raw",
+                contentKeyBytes as BufferSource,
+                { name: "AES-GCM", length: E2E_CONTENT_KEY_BYTES * 8 },
+                false,
+                ["decrypt"]
+            );
+
+            const payloadAad = buildE2ePayloadAad(ctx);
             const plainBytes = await crypto.subtle.decrypt(
-                { name: "AES-GCM", iv: iv as BufferSource, additionalData: aad as BufferSource },
-                aesKey,
-                ct as BufferSource
+                { name: "AES-GCM", iv: parsed.payloadIv as BufferSource, additionalData: payloadAad as BufferSource },
+                contentKey,
+                parsed.payload as BufferSource
             );
             return new TextDecoder().decode(plainBytes);
         } catch {
@@ -915,25 +1083,19 @@ export class CryptoService {
     }
 
     /**
-     * Cheap check used by the receiver decoration before it tries to
-     * decrypt: compares the envelope's recipient fingerprint against
-     * the fingerprint of our currently-active public key.
+     * Cheap pre-check used by the receiver decoration before it tries
+     * to decrypt: returns true if any slot in the envelope is addressed
+     * to the fingerprint of our current public key.
      */
     async isEnvelopeAddressedToUs(envelope: Uint8Array): Promise<boolean> {
         try {
             await this._ensureInitialized();
             if (!this._activePrivateKeyHex) return false;
-            if (!(envelope instanceof Uint8Array) || envelope.length < E2E_MIN_ENVELOPE_BYTES) return false;
-            if (envelope[0] !== E2E_ENVELOPE_VERSION) return false;
-            if (envelope[1] !== E2E_ENVELOPE_MAGIC[0]) return false;
-            if (envelope[2] !== E2E_ENVELOPE_MAGIC[1]) return false;
-            const envelopeFpr = envelope.slice(3, 3 + E2E_FPR_BYTES);
+            const parsed = parseE2eEnvelope(envelope);
+            if (!parsed) return false;
             const ourPub = await this.getPublicKey();
             const ourFpr = await fingerprintPubkey(ourPub);
-            for (let i = 0; i < E2E_FPR_BYTES; i++) {
-                if (envelopeFpr[i] !== ourFpr[i]) return false;
-            }
-            return true;
+            return parsed.slots.some(slot => bytesEqualConstantTime(slot.fpr, ourFpr));
         } catch {
             return false;
         }
