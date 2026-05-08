@@ -258,3 +258,18 @@ export async function isBindingActiveAt(
     const result = await jsonRequest<{ active: boolean; }>("GET", url);
     return result.active === true;
 }
+
+/**
+ * Returns the most recently linked *active* binding for a Discord uid,
+ * or null if the user has no active binding. Used by the E2E plugin to
+ * decide whether to offer the encrypt-to-recipient toggle and to pick
+ * the key to encrypt against.
+ */
+export async function getActiveBindingForUid(discordUid: string): Promise<BindingRow | null> {
+    const result = await fetchBindingsByDiscordUid(discordUid);
+    const rows = Array.isArray(result?.bindings) ? result.bindings : [];
+    const active = rows
+        .filter(row => row && row.unlinkedAt == null && typeof row.publicKey === "string")
+        .sort((a, b) => b.linkedAt - a.linkedAt);
+    return active[0] ?? null;
+}

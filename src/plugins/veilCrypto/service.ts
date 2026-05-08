@@ -12,6 +12,7 @@ import {
     BACKUP_SALT_BYTES,
     base64ToBytes,
     bytesToBase64,
+    fromHex,
     isValidPrivateKeyHex,
     normalizeByteArray,
     normalizePrivateKeyHex,
@@ -19,6 +20,61 @@ import {
     VAULT_IV_BYTES,
     VAULT_KEY_BYTES
 } from "./utils";
+import {
+    deriveSharedBits,
+    ed25519PrivToX25519,
+    ed25519PubToX25519,
+    generateEphemeralX25519,
+    isAvailable as isX25519Available
+} from "./x25519";
+
+const E2E_ENVELOPE_VERSION = 0x01;
+const E2E_ENVELOPE_MAGIC = new Uint8Array([0x56, 0xE2]);
+const E2E_FPR_BYTES = 4;
+const E2E_EPH_PUB_BYTES = 32;
+const E2E_IV_BYTES = 12;
+const E2E_AEAD_TAG_BYTES = 16;
+const E2E_HEADER_BYTES = 1 + E2E_ENVELOPE_MAGIC.length + E2E_FPR_BYTES + E2E_EPH_PUB_BYTES + E2E_IV_BYTES;
+const E2E_MIN_ENVELOPE_BYTES = E2E_HEADER_BYTES + E2E_AEAD_TAG_BYTES;
+
+export interface VeilE2eContext {
+    senderUid: string;
+    recipientUid: string;
+    channelId: string;
+}
+
+function buildE2eAad(ctx: VeilE2eContext): Uint8Array {
+    const s = `veil-e2e-dm/v1\n${ctx.senderUid}\n${ctx.recipientUid}\n${ctx.channelId}`;
+    return new TextEncoder().encode(s);
+}
+
+async function fingerprintPubkey(ed25519PubHex: string): Promise<Uint8Array> {
+    const bytes = fromHex(ed25519PubHex.toLowerCase());
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource));
+    return digest.slice(0, E2E_FPR_BYTES);
+}
+
+async function deriveE2eAesKey(sharedSecret: Uint8Array, info: Uint8Array): Promise<CryptoKey> {
+    const baseKey = await crypto.subtle.importKey(
+        "raw",
+        sharedSecret as BufferSource,
+        "HKDF",
+        false,
+        ["deriveKey"]
+    );
+    return crypto.subtle.deriveKey(
+        {
+            name: "HKDF",
+            hash: "SHA-256",
+            salt: new Uint8Array(0) as BufferSource,
+            info: info as BufferSource
+        },
+        baseKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+    );
+}
 
 export class CryptoService {
     private static instance: CryptoService | null = null;
@@ -759,6 +815,128 @@ export class CryptoService {
             publicKey: decrypted?.publicKey || null,
             uid: decrypted?.uid || null
         };
+    }
+
+    /**
+     * Encrypt `plaintext` to the holder of `recipientEd25519PubHex`. The
+     * result is an opaque byte envelope that carries the sender's
+     * ephemeral X25519 public key, a random IV, and AES-256-GCM
+     * ciphertext bound to the sender/recipient/channel triple via HKDF
+     * `info` and the AEAD additional-data. Nothing in the envelope is
+     * secret on its own — the long-term secrets stay in the vault.
+     */
+    async encryptForRecipient(
+        recipientEd25519PubHex: string,
+        plaintext: string,
+        ctx: VeilE2eContext
+    ): Promise<Uint8Array> {
+        await this._ensureInitialized();
+        if (!(await isX25519Available())) {
+            throw new Error("This Discord build doesn't support X25519 end-to-end crypto.");
+        }
+
+        const recipientX25519Pub = ed25519PubToX25519(recipientEd25519PubHex);
+        const { privSeed: ephPriv, rawPub: ephPub } = await generateEphemeralX25519();
+        const sharedSecret = await deriveSharedBits(ephPriv, recipientX25519Pub);
+
+        const aad = buildE2eAad(ctx);
+        const aesKey = await deriveE2eAesKey(sharedSecret, aad);
+
+        const iv = crypto.getRandomValues(new Uint8Array(E2E_IV_BYTES));
+        const encoded = new TextEncoder().encode(plaintext);
+        const ciphertextAndTag = new Uint8Array(await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv: iv as BufferSource, additionalData: aad as BufferSource },
+            aesKey,
+            encoded as BufferSource
+        ));
+
+        const fpr = await fingerprintPubkey(recipientEd25519PubHex);
+
+        const envelope = new Uint8Array(E2E_HEADER_BYTES + ciphertextAndTag.length);
+        let o = 0;
+        envelope[o++] = E2E_ENVELOPE_VERSION;
+        envelope.set(E2E_ENVELOPE_MAGIC, o); o += E2E_ENVELOPE_MAGIC.length;
+        envelope.set(fpr, o); o += E2E_FPR_BYTES;
+        envelope.set(ephPub, o); o += E2E_EPH_PUB_BYTES;
+        envelope.set(iv, o); o += E2E_IV_BYTES;
+        envelope.set(ciphertextAndTag, o);
+
+        return envelope;
+    }
+
+    /**
+     * Try to decrypt an E2E envelope with the current active private
+     * key. Returns the plaintext on success, or `null` for any failure
+     * mode (wrong recipient, bad magic, tampered ciphertext, locked
+     * vault). Never throws — the receiver decorator calls this on every
+     * candidate message and a throw would poison the message list.
+     */
+    async tryDecryptFromSender(
+        envelope: Uint8Array,
+        ctx: VeilE2eContext
+    ): Promise<string | null> {
+        try {
+            await this._ensureInitialized();
+            if (!this._activePrivateKeyHex) return null;
+            if (!(await isX25519Available())) return null;
+            if (!(envelope instanceof Uint8Array) || envelope.length < E2E_MIN_ENVELOPE_BYTES) return null;
+
+            let o = 0;
+            if (envelope[o++] !== E2E_ENVELOPE_VERSION) return null;
+            if (envelope[o++] !== E2E_ENVELOPE_MAGIC[0]) return null;
+            if (envelope[o++] !== E2E_ENVELOPE_MAGIC[1]) return null;
+
+            const envelopeFpr = envelope.slice(o, o + E2E_FPR_BYTES); o += E2E_FPR_BYTES;
+            const ephPub = envelope.slice(o, o + E2E_EPH_PUB_BYTES); o += E2E_EPH_PUB_BYTES;
+            const iv = envelope.slice(o, o + E2E_IV_BYTES); o += E2E_IV_BYTES;
+            const ct = envelope.slice(o);
+
+            const ourPub = await this.getPublicKey();
+            const ourFpr = await fingerprintPubkey(ourPub);
+            for (let i = 0; i < E2E_FPR_BYTES; i++) {
+                if (envelopeFpr[i] !== ourFpr[i]) return null;
+            }
+
+            const myX25519Priv = await ed25519PrivToX25519(this._activePrivateKeyHex);
+            const sharedSecret = await deriveSharedBits(myX25519Priv, ephPub);
+
+            const aad = buildE2eAad(ctx);
+            const aesKey = await deriveE2eAesKey(sharedSecret, aad);
+
+            const plainBytes = await crypto.subtle.decrypt(
+                { name: "AES-GCM", iv: iv as BufferSource, additionalData: aad as BufferSource },
+                aesKey,
+                ct as BufferSource
+            );
+            return new TextDecoder().decode(plainBytes);
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Cheap check used by the receiver decoration before it tries to
+     * decrypt: compares the envelope's recipient fingerprint against
+     * the fingerprint of our currently-active public key.
+     */
+    async isEnvelopeAddressedToUs(envelope: Uint8Array): Promise<boolean> {
+        try {
+            await this._ensureInitialized();
+            if (!this._activePrivateKeyHex) return false;
+            if (!(envelope instanceof Uint8Array) || envelope.length < E2E_MIN_ENVELOPE_BYTES) return false;
+            if (envelope[0] !== E2E_ENVELOPE_VERSION) return false;
+            if (envelope[1] !== E2E_ENVELOPE_MAGIC[0]) return false;
+            if (envelope[2] !== E2E_ENVELOPE_MAGIC[1]) return false;
+            const envelopeFpr = envelope.slice(3, 3 + E2E_FPR_BYTES);
+            const ourPub = await this.getPublicKey();
+            const ourFpr = await fingerprintPubkey(ourPub);
+            for (let i = 0; i < E2E_FPR_BYTES; i++) {
+                if (envelopeFpr[i] !== ourFpr[i]) return false;
+            }
+            return true;
+        } catch {
+            return false;
+        }
     }
 }
 
