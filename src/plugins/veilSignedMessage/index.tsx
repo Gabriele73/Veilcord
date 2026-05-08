@@ -22,10 +22,23 @@ let lastEnabled = false;
 interface Pending {
     /** Final Discord content (visible body + ZWC marker) — used to match the MESSAGE_CREATE event. */
     matchContent: string;
-    /** Canonical body the signature was computed over. Includes attachment hashes when present. */
-    signedBody: string;
+    /**
+     * For text-only messages we sign in pre-send and ship the canonical
+     * body + signature here. For messages with attachments we can't sign
+     * yet because Discord may re-encode images (PNG → WebP) inside its
+     * CloudUpload pipeline and `upload.item.file` is never mutated, so
+     * any hash we compute pre-send won't match what the CDN serves. In
+     * that case we leave these null and let `onMessageCreate` reach
+     * across to the live `message.attachments[].url`, hash the served
+     * bytes, build the canonical body, sign, and register.
+     */
+    signedBody: string | null;
     publicKey: string;
-    signature: string;
+    signature: string | null;
+    /** Plain text the user typed, with no ZWC marker. Required for late binding. */
+    plainText: string;
+    /** True iff this message had attachments at send-time and needs late hashing. */
+    needsAttachmentBinding: boolean;
     expiresAt: number;
 }
 
@@ -103,17 +116,49 @@ function onMessageCreate(event: any) {
     const pending = takeMatchingPending(channelId, message.content);
     if (!pending) return;
 
-    void registerOnBackend(message.id, pending.signedBody, pending.publicKey, pending.signature)
-        .then(() => {
-            try {
-                window.dispatchEvent(new CustomEvent("veil:signed-message:registered", {
-                    detail: { discordMessageId: message.id }
-                }));
-            } catch { /* ignore */ }
-        })
-        .catch(err => {
-            showToast(`Veil: couldn't register signature (${err?.message || err}).`, Toasts.Type.FAILURE);
-        });
+    void finalizeAndRegister(message, pending).catch(err => {
+        showToast(`Veil: couldn't register signature (${err?.message || err}).`, Toasts.Type.FAILURE);
+    });
+}
+
+/**
+ * Hash served attachment bytes from the CDN URLs Discord just published.
+ * This is the only point at which the sender can see the exact bytes the
+ * verifier will see, since Discord's CloudUpload may have re-encoded
+ * images on the way out (PNG → WebP) without telling us.
+ */
+async function hashAttachmentsFromMessage(message: any): Promise<CanonicalAttachment[]> {
+    const atts = Array.isArray(message?.attachments) ? message.attachments : [];
+    const out: CanonicalAttachment[] = [];
+    for (const att of atts) {
+        const url = typeof att?.url === "string" ? att.url : null;
+        if (!url) throw new Error("attachment missing url");
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`attachment HTTP ${res.status}`);
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        out.push({ sha256Hex: await cryptoService.sha256Hex(bytes) });
+    }
+    return out;
+}
+
+async function finalizeAndRegister(message: any, pending: Pending): Promise<void> {
+    let signedBody = pending.signedBody;
+    let signature = pending.signature;
+    const publicKey = pending.publicKey;
+
+    if (pending.needsAttachmentBinding || !signedBody || !signature) {
+        const hashes = await hashAttachmentsFromMessage(message);
+        signedBody = VeilSignedBody.buildCanonicalSignedBody(pending.plainText, hashes);
+        signature = await cryptoService.sign(signedBody);
+    }
+
+    await registerOnBackend(message.id, signedBody!, publicKey, signature!);
+
+    try {
+        window.dispatchEvent(new CustomEvent("veil:signed-message:registered", {
+            detail: { discordMessageId: message.id }
+        }));
+    } catch { /* ignore */ }
 }
 
 const sendListener: MessageSendListener = async (channelId, messageObj, options) => {
@@ -131,36 +176,7 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
             return { cancel: true };
         }
 
-        // Hash every attachment's plaintext bytes so the signature
-        // binds the file content the sender saw, not what the CDN
-        // happens to serve later. Order matches `options.uploads`,
-        // which Discord forwards as `message.attachments` in the same
-        // order at MESSAGE_CREATE time on the receiver.
-        //
-        // Discord re-encodes some images (PNG, JPEG) to WebP inside
-        // CloudUpload.upload() via `maybeConvertToWebP`, which mutates
-        // `upload.item.file` to point at the converted bytes. We have
-        // to force that conversion to happen *before* we hash, or the
-        // CDN will serve different bytes than the ones we signed and
-        // every verifier will compute a mismatching digest. The method
-        // is idempotent, so calling it here is safe even when the
-        // upload pipeline runs it again later.
-        const attachmentHashes: CanonicalAttachment[] = [];
-        for (const upload of uploads) {
-            try { await upload?.maybeConvertToWebP?.(); } catch { /* fall through to hash whatever's there */ }
-            const file: File | undefined = upload?.item?.file;
-            if (!file) {
-                showToast("Sign mode: couldn't read an attachment to hash it.", Toasts.Type.FAILURE);
-                return { cancel: true };
-            }
-            const bytes = new Uint8Array(await file.arrayBuffer());
-            const sha256Hex = await cryptoService.sha256Hex(bytes);
-            attachmentHashes.push({ sha256Hex });
-        }
-
         const publicKey = await cryptoService.getPublicKey();
-        const canonicalBody = VeilSignedBody.buildCanonicalSignedBody(text, attachmentHashes);
-        const signature = await cryptoService.sign(canonicalBody);
         const marker = VeilZwc.encodeMarker();
         const finalContent = text + marker;
 
@@ -171,11 +187,26 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
 
         messageObj.content = finalContent;
 
+        // Text-only messages: sign now and ship the canonical body in
+        // the pending entry. Messages with attachments: defer signing
+        // to MESSAGE_CREATE, where we can hash the bytes Discord
+        // actually published to the CDN (which may differ from the
+        // bytes on disk if Discord re-encoded a PNG to WebP inside
+        // its CloudUpload pipeline).
+        let signedBody: string | null = null;
+        let signature: string | null = null;
+        if (uploads.length === 0) {
+            signedBody = VeilSignedBody.buildCanonicalSignedBody(text, []);
+            signature = await cryptoService.sign(signedBody);
+        }
+
         pushPending(channelId, {
             matchContent: finalContent,
-            signedBody: canonicalBody,
+            signedBody,
             publicKey,
             signature,
+            plainText: text,
+            needsAttachmentBinding: uploads.length > 0,
             expiresAt: Date.now() + PENDING_TTL_MS
         });
     } catch (e: any) {
