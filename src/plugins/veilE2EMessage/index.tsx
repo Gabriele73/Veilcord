@@ -6,7 +6,7 @@
 
 import { addChatBarButton, ChatBarButton, ChatBarButtonFactory, removeChatBarButton } from "@api/ChatButtons";
 import { addMessageAccessory, removeMessageAccessory } from "@api/MessageAccessories";
-import { addMessagePreSendListener, MessageSendListener, removeMessagePreSendListener } from "@api/MessageEvents";
+import { addMessagePreSendListener, MessageEditListener, MessageSendListener, removeMessagePreEditListener, addMessagePreEditListener, removeMessagePreSendListener } from "@api/MessageEvents";
 import { updateMessage } from "@api/MessageUpdater";
 import { cryptoService, getActiveBindingForUid, VeilCryptoUtils, VeilX25519 } from "@plugins/veilCrypto";
 import { Devs } from "@utils/constants";
@@ -500,6 +500,20 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
         showToast(`E2E failed: ${e?.message || e}`, Toasts.Type.FAILURE);
         return { cancel: true };
     }
+};
+
+/*
+ * Block edits on Veil-decrypted messages. Discord's edit flow re-sends
+ * the new content as plaintext, which would replace the encrypted
+ * envelope on the wire and leak whatever the user typed to the server
+ * (and to any non-Veil receiver). The user toggled E2E specifically to
+ * avoid that. Force them to delete + resend instead.
+ */
+const editListener: MessageEditListener = async (_channelId, messageId) => {
+    const entry = getEntry(messageId);
+    if (!entry) return;
+    showToast("Encrypted Veil messages can't be edited. Delete and resend.", Toasts.Type.FAILURE);
+    return { cancel: true };
 };
 
 /* ---------------- Receive path ---------------- */
@@ -1068,6 +1082,7 @@ export default definePlugin({
     start() {
         addChatBarButton(BUTTON_ID, VeilE2EButton, LockIcon);
         addMessagePreSendListener(sendListener);
+        addMessagePreEditListener(editListener);
         addMessageAccessory(ACCESSORY_ID, E2eAccessoryHost, -1);
         FluxDispatcher.subscribe("MESSAGE_CREATE", onFluxMessageCreate);
         FluxDispatcher.subscribe("MESSAGE_UPDATE", onFluxMessageUpdate);
@@ -1083,6 +1098,7 @@ export default definePlugin({
     stop() {
         removeChatBarButton(BUTTON_ID);
         removeMessagePreSendListener(sendListener);
+        removeMessagePreEditListener(editListener);
         removeMessageAccessory(ACCESSORY_ID);
         FluxDispatcher.unsubscribe("MESSAGE_CREATE", onFluxMessageCreate);
         FluxDispatcher.unsubscribe("MESSAGE_UPDATE", onFluxMessageUpdate);

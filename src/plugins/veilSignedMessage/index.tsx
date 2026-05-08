@@ -5,10 +5,10 @@
  */
 
 import { addChatBarButton, ChatBarButton, ChatBarButtonFactory, removeChatBarButton } from "@api/ChatButtons";
-import { addMessagePreSendListener, MessageSendListener, removeMessagePreSendListener } from "@api/MessageEvents";
+import { addMessagePreEditListener, addMessagePreSendListener, MessageEditListener, MessageSendListener, removeMessagePreEditListener, removeMessagePreSendListener } from "@api/MessageEvents";
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { FluxDispatcher, showToast, Toasts, useEffect, UserStore, useState } from "@webpack/common";
+import { FluxDispatcher, MessageStore, showToast, Toasts, useEffect, UserStore, useState } from "@webpack/common";
 
 import { CanonicalAttachment, cryptoService, veilApiBase, VeilSignedBody, VeilZwc } from "@plugins/veilCrypto";
 import { SignIcon } from "./SignIcon";
@@ -227,6 +227,22 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
 };
 
 /*
+ * Block edits on signed messages. Discord's edit flow re-sends the
+ * new content as the new body — without our ZWC marker and without
+ * touching the backend signature record. The receiver would still
+ * have a marker-less edited body matched against an old signature
+ * that doesn't cover it, so the badge would flip to "Invalid" the
+ * moment the edit lands. Force the user to delete + resend instead.
+ */
+const editListener: MessageEditListener = async (channelId, messageId) => {
+    const original = MessageStore.getMessage?.(channelId, messageId);
+    const content = typeof original?.content === "string" ? original.content : "";
+    if (!VeilZwc.hasSignedMessageRef(content)) return;
+    showToast("Signed Veil messages can't be edited. Delete and resend.", Toasts.Type.FAILURE);
+    return { cancel: true };
+};
+
+/*
  * Sign mode and E2E mode are mutually exclusive: signing wraps the
  * plaintext in a backend record keyed by the Discord message id, while
  * E2E replaces the body with an opaque envelope the backend can't sign
@@ -307,6 +323,7 @@ export default definePlugin({
     start() {
         addChatBarButton(BUTTON_ID, VeilSignButton, SignIcon);
         addMessagePreSendListener(sendListener);
+        addMessagePreEditListener(editListener);
         FluxDispatcher.subscribe("MESSAGE_CREATE", onMessageCreate);
         window.addEventListener(MODE_E2E_ON_EVENT, disableSignMode);
     },
@@ -314,6 +331,7 @@ export default definePlugin({
     stop() {
         removeChatBarButton(BUTTON_ID);
         removeMessagePreSendListener(sendListener);
+        removeMessagePreEditListener(editListener);
         FluxDispatcher.unsubscribe("MESSAGE_CREATE", onMessageCreate);
         window.removeEventListener(MODE_E2E_ON_EVENT, disableSignMode);
         pendingByChannel.clear();
