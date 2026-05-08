@@ -402,8 +402,11 @@ function applyCachedAttachmentsInPlace(message: any, messageId: string, cached: 
             id: `veil_${messageId}_${i}`,
             filename: a.name,
             size: a.size,
-            url: a.blobUrl,
-            proxy_url: a.blobUrl,
+            // The "#" suffix turns Discord's appended `?format=webp&width=…&height=…`
+            // query into a fragment, so the browser still resolves the same blob URL.
+            // Without this, the rendered <img src> becomes a 404.
+            url: a.blobUrl + "#",
+            proxy_url: a.blobUrl + "#",
             content_type: a.mime,
             spoiler: a.spoiler,
             width: a.width,
@@ -592,8 +595,11 @@ async function decryptAndCommit(messageId: string): Promise<void> {
                 id: `veil_${messageId}_${i}`,
                 filename: meta.name,
                 size: meta.size,
-                url: blobUrl,
-                proxy_url: blobUrl,
+                // See applyCachedAttachmentsInPlace: "#" is what keeps
+                // Discord's `?format=webp&width=…&height=…` from
+                // breaking the blob URL.
+                url: blobUrl + "#",
+                proxy_url: blobUrl + "#",
                 content_type: meta.mime,
                 spoiler: !!meta.spoiler,
                 width: meta.width,
@@ -768,8 +774,10 @@ function buildDecryptedAttachmentList(
         id: `veil_${messageId}_${i}`,
         filename: cached[i].name,
         size: cached[i].size,
-        url: cached[i].blobUrl,
-        proxy_url: cached[i].blobUrl,
+        // "#" so Discord's `?format=webp&width=…&height=…` resize-query
+        // becomes a fragment and doesn't break the blob URL.
+        url: cached[i].blobUrl + "#",
+        proxy_url: cached[i].blobUrl + "#",
         content_type: cached[i].mime,
         spoiler: cached[i].spoiler,
         width: cached[i].width,
