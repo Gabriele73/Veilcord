@@ -7,11 +7,13 @@
 import { addChatBarButton, ChatBarButton, ChatBarButtonFactory, removeChatBarButton } from "@api/ChatButtons";
 import { addMessagePreEditListener, addMessagePreSendListener, MessageEditListener, MessageSendListener, removeMessagePreEditListener, removeMessagePreSendListener } from "@api/MessageEvents";
 import { Devs } from "@utils/constants";
-import definePlugin from "@utils/types";
+import definePlugin, { PluginNative } from "@utils/types";
 import { FluxDispatcher, MessageStore, showToast, Toasts, useEffect, UserStore, useState } from "@webpack/common";
 
 import { CanonicalAttachment, cryptoService, getActiveBindingForUid, veilApiBase, VeilSignedBody, VeilZwc } from "@plugins/veilCrypto";
 import { SignIcon } from "./SignIcon";
+
+const Native = VencordNative.pluginHelpers.VeilSignedMessage as PluginNative<typeof import("./native")>;
 
 // veil v0.0.2
 
@@ -143,9 +145,11 @@ async function hashAttachmentsFromMessage(message: any): Promise<CanonicalAttach
     for (const att of atts) {
         const url = typeof att?.url === "string" ? att.url : null;
         if (!url) throw new Error("attachment missing url");
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`attachment HTTP ${res.status}`);
-        const bytes = new Uint8Array(await res.arrayBuffer());
+        const fetched = await Native.fetchAttachmentBytes(url);
+        if (!fetched.ok) throw new Error(`attachment fetch failed: ${fetched.error}`);
+        const bytes = fetched.bytes instanceof Uint8Array
+            ? fetched.bytes
+            : new Uint8Array(fetched.bytes as any);
         out.push({ sha256Hex: await cryptoService.sha256Hex(bytes) });
     }
     return out;

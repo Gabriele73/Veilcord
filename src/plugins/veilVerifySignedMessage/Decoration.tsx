@@ -6,10 +6,13 @@
 
 import { CanonicalAttachment, cryptoService, isBindingActiveAt, veilApiBase, VeilSignedBody } from "@plugins/veilCrypto";
 import { openModal } from "@utils/modal";
+import { PluginNative } from "@utils/types";
 import { ReactDOM, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
 
 import { extractVeilSigRef, stripZwc, VeilSigRef } from "./parser";
 import { VerifyModal } from "./VerifyModal";
+
+const Native = VencordNative.pluginHelpers.VeilVerifySignedMessage as PluginNative<typeof import("./native")>;
 
 type FlairState = "loading" | "verified" | "signed" | "invalid" | "unverified";
 
@@ -80,9 +83,11 @@ async function hashAttachmentByUrl(url: string): Promise<string | null> {
     const cached = attachmentHashCache.get(url);
     if (cached && Date.now() - cached.ts < ATTACHMENT_HASH_TTL_MS) return cached.hex;
     try {
-        const res = await fetch(url);
-        if (!res.ok) return null;
-        const bytes = new Uint8Array(await res.arrayBuffer());
+        const fetched = await Native.fetchAttachmentBytes(url);
+        if (!fetched.ok) return null;
+        const bytes = fetched.bytes instanceof Uint8Array
+            ? fetched.bytes
+            : new Uint8Array(fetched.bytes as any);
         const hex = await cryptoService.sha256Hex(bytes);
         attachmentHashCache.set(url, { hex, ts: Date.now() });
         return hex;

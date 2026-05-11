@@ -14,9 +14,12 @@ import { HeadingTertiary } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
 import { CanonicalAttachment, cryptoService, isBindingActiveAt, veilApiBase, VeilSignedBody } from "@plugins/veilCrypto";
 import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
+import { PluginNative } from "@utils/types";
 import { useEffect, useState } from "@webpack/common";
 
 import { VeilSigRef } from "./parser";
+
+const Native = VencordNative.pluginHelpers.VeilVerifySignedMessage as PluginNative<typeof import("./native")>;
 
 type Status = "loading" | "verifying" | "valid" | "invalid" | "error" | "missing";
 
@@ -112,9 +115,11 @@ export function VerifyModal({
             const out: CanonicalAttachment[] = [];
             for (const url of attachmentUrls) {
                 try {
-                    const res = await fetch(url);
-                    if (!res.ok) return null;
-                    const bytes = new Uint8Array(await res.arrayBuffer());
+                    const fetched = await Native.fetchAttachmentBytes(url);
+                    if (!fetched.ok) return null;
+                    const bytes = fetched.bytes instanceof Uint8Array
+                        ? fetched.bytes
+                        : new Uint8Array(fetched.bytes as any);
                     out.push({ sha256Hex: await cryptoService.sha256Hex(bytes) });
                 } catch {
                     return null;
