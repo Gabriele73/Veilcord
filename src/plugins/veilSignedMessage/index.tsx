@@ -215,10 +215,17 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
         // pipeline would silently drop it. A trailing space terminates
         // the URL match cleanly, and chat rendering hides it.
         //
+        // Skip the fence when the user typed nothing (attachment-only
+        // send): Discord normalizes a whitespace-prefixed, otherwise
+        // invisible content down to just the ZWC marker before it hits
+        // the server, so keeping the leading space here would make the
+        // MESSAGE_CREATE content diverge from `pending.matchContent`
+        // and the signature would never get registered.
+        //
         // Both visible body and canonical body include this space so
         // the receiver's `stripZwc` (which only removes ZWC chars,
         // not whitespace) gives back the same string the sender signed.
-        const visibleBody = text + " ";
+        const visibleBody = text.length > 0 ? text + " " : "";
         const finalContent = visibleBody + marker;
 
         if (finalContent.length > 2000) {
