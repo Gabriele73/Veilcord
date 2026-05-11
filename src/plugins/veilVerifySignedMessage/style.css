@@ -27,6 +27,10 @@
     display: inline;
 }
 
+.vc-veil-sig-reply-overlay {
+    display: inline;
+}
+
 .vc-veil-sig-dot {
     --veil-dot-bg: rgba(255, 255, 255, 0.06);
     --veil-dot-border: rgba(255, 255, 255, 0.14);
@@ -211,4 +215,34 @@ li[id^="chat-messages-"]:hover .vc-veil-sig-dot__label {
 .vc-veil-modal span,
 .vc-veil-modal label {
     color: var(--veil-text);
+}
+
+/*
+ * Reply-preview variant: compact icon-only flair rendered inline next
+ * to the replied-to message snippet. Reply previews are tight and
+ * single-line, so we keep this one fixed-width (no hover expansion)
+ * and pin opacity to 1 to read against the muted reply-context text.
+ */
+.vc-veil-sig-dot--reply {
+    margin: 0 4px 0 0;
+    height: 14px;
+    width: 14px;
+    opacity: 1;
+    vertical-align: -2px;
+}
+
+.vc-veil-sig-dot--reply svg {
+    left: 1px;
+    width: 10px;
+    height: 10px;
+}
+
+li[id^="chat-messages-"]:hover .vc-veil-sig-dot--reply,
+.vc-veil-sig-dot--reply:focus-visible {
+    width: 14px;
+    padding-right: 0;
+}
+
+.vc-veil-sig-dot--reply .vc-veil-sig-dot__label {
+    display: none;
 }

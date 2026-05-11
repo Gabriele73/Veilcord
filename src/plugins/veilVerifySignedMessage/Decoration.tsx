@@ -7,7 +7,7 @@
 import { CanonicalAttachment, cryptoService, isBindingActiveAt, veilApiBase, VeilSignedBody } from "@plugins/veilCrypto";
 import { openModal } from "@utils/modal";
 import { PluginNative } from "@utils/types";
-import { ReactDOM, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
+import { MessageStore, ReactDOM, useEffect, useLayoutEffect, useRef, useState, useStateFromStores } from "@webpack/common";
 
 import { extractVeilSigRef, stripZwc, VeilSigRef } from "./parser";
 import { VerifyModal } from "./VerifyModal";
@@ -320,7 +320,25 @@ function StateGlyph({ state }: { state: FlairState; }) {
 
 export function VeilSigBadge({ message }: { message: any; }) {
     const ref = extractVeilSigRef(message?.content);
-    if (!ref) return null;
+    const refMessageId: string | null = typeof message?.messageReference?.message_id === "string"
+        ? message.messageReference.message_id
+        : null;
+    const refChannelId: string | null = typeof message?.messageReference?.channel_id === "string"
+        ? message.messageReference.channel_id
+        : (typeof message?.channel_id === "string" ? message.channel_id : null);
+
+    return (
+        <>
+            {ref && <MainMessageBadge message={message} ref_={ref} />}
+            {refMessageId && refChannelId && (
+                <ReplyContextBadge refChannelId={refChannelId} refMessageId={refMessageId} />
+            )}
+        </>
+    );
+}
+
+function MainMessageBadge({ message, ref_ }: { message: any; ref_: VeilSigRef; }) {
+    const ref = ref_;
 
     const authorTag = message?.author
         ? message.author.global_name || message.author.username || message.author.id
@@ -409,11 +427,20 @@ export function VeilSigBadge({ message }: { message: any; }) {
 
         const li = anchor.closest("li[id^=\"chat-messages-\"]") as HTMLElement | null;
         if (!li) return;
+        if (!discordMessageId) return;
+
+        // Match the message body by its EXACT id. A bare
+        // `[id^="message-content-"]` selector also matches the
+        // replied-to-message snippet that Discord renders inside the
+        // same <li> (which has id `message-content-<refId>`), so on
+        // reply messages the badge would portal into the reply preview
+        // instead of the actual body.
+        const contentSelector = `#message-content-${CSS.escape(discordMessageId)}`;
 
         let attached: HTMLElement | null = null;
 
         const ensureHost = () => {
-            const content = li.querySelector("[id^=\"message-content-\"]") as HTMLElement | null;
+            const content = li.querySelector(contentSelector) as HTMLElement | null;
             if (!content) {
                 if (attached) {
                     attached = null;
@@ -447,7 +474,7 @@ export function VeilSigBadge({ message }: { message: any; }) {
         const observer = new MutationObserver(() => {
             const ok = attached
                 && attached.isConnected
-                && attached.parentElement?.id?.startsWith("message-content-") === true
+                && attached.parentElement?.id === `message-content-${discordMessageId}`
                 && attached === attached.parentElement.lastElementChild;
             if (!ok) ensureHost();
         });
@@ -490,6 +517,182 @@ export function VeilSigBadge({ message }: { message: any; }) {
         <>
             <span ref={anchorRef} className="vc-veil-sig-anchor" aria-hidden="true" />
             {overlayHost && ReactDOM.createPortal(badge, overlayHost)}
+        </>
+    );
+}
+
+/*
+ * Inline flair mounted inside the reply-context snippet (the
+ * `[id="message-content-<refId>"]` element Discord renders when a
+ * message is a reply). Reuses the same verify-and-lookup pipeline as
+ * the main badge but portals its button into the reply preview slot
+ * instead of the message body, so a reply that targets a signed
+ * message shows the original sender's flair next to the snippet.
+ */
+function ReplyContextBadge({
+    refChannelId,
+    refMessageId
+}: {
+    refChannelId: string;
+    refMessageId: string;
+}) {
+    const refMessage = useStateFromStores(
+        [MessageStore],
+        () => MessageStore.getMessage(refChannelId, refMessageId) ?? null,
+        [refChannelId, refMessageId]
+    ) as any;
+
+    const ref = extractVeilSigRef(refMessage?.content);
+
+    const authorTag = refMessage?.author
+        ? refMessage.author.global_name || refMessage.author.username || refMessage.author.id
+        : undefined;
+    const authorId: string | null = refMessage?.author?.id ?? null;
+    const channelId: string | null = typeof refMessage?.channel_id === "string"
+        ? refMessage.channel_id
+        : refChannelId;
+    const strippedContent = stripZwc(typeof refMessage?.content === "string" ? refMessage.content : "");
+    const attachmentUrls: string[] = Array.isArray(refMessage?.attachments)
+        ? refMessage.attachments.map((a: any) => (typeof a?.url === "string" ? a.url : "")).filter(Boolean)
+        : [];
+
+    const timestamp = (() => {
+        const t = refMessage?.timestamp;
+        if (!t) return undefined;
+        try {
+            const d = typeof t === "string" || typeof t === "number"
+                ? new Date(t)
+                : (t?.toDate?.() ?? new Date(String(t)));
+            return d.toLocaleString();
+        } catch {
+            return String(t);
+        }
+    })();
+
+    const input: LookupInput | null = ref
+        ? { sigRef: ref, discordMessageId: refMessageId, channelId, strippedContent, authorId, attachmentUrls }
+        : null;
+    const cacheKey = input ? lookupKey(input) : null;
+
+    const [state, setState] = useState<FlairState>(() => {
+        if (!cacheKey) return "loading";
+        return flairCache.get(cacheKey)?.state ?? "loading";
+    });
+
+    useEffect(() => {
+        if (!input) return;
+        let cancelled = false;
+        let nonce = 0;
+
+        const run = () => {
+            const myNonce = ++nonce;
+            void computeFlairState(input, () => { /* noop */ }).then(result => {
+                if (cancelled || myNonce !== nonce) return;
+                setState(result);
+            });
+        };
+
+        run();
+
+        const onRegistered = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (!detail || typeof detail.discordMessageId !== "string") return;
+            if (detail.discordMessageId !== refMessageId) return;
+            bustCacheForDiscordMessageId(refMessageId);
+            setState("loading");
+            run();
+        };
+        window.addEventListener(REGISTERED_EVENT, onRegistered as EventListener);
+
+        return () => {
+            cancelled = true;
+            window.removeEventListener(REGISTERED_EVENT, onRegistered as EventListener);
+        };
+    }, [ref?.v, refMessageId, channelId, authorId, strippedContent, attachmentUrls.join("|")]);
+
+    const anchorRef = useRef<HTMLSpanElement | null>(null);
+    const [host, setHost] = useState<HTMLElement | null>(null);
+
+    useLayoutEffect(() => {
+        const anchor = anchorRef.current;
+        if (!anchor) return;
+        const li = anchor.closest("li[id^=\"chat-messages-\"]") as HTMLElement | null;
+        if (!li) return;
+
+        const contentSelector = `#message-content-${CSS.escape(refMessageId)}`;
+        let attached: HTMLElement | null = null;
+
+        const ensureHost = () => {
+            const content = li.querySelector(contentSelector) as HTMLElement | null;
+            if (!content) {
+                if (attached) { attached = null; setHost(null); }
+                return;
+            }
+            let h = content.querySelector(":scope > .vc-veil-sig-reply-overlay") as HTMLElement | null;
+            if (!h) {
+                h = document.createElement("span");
+                h.className = "vc-veil-sig-reply-overlay";
+            }
+            // Pin to the front of the reply snippet (before the snippet
+            // text) so the flair leads the line, mirroring how Discord
+            // shows author chips in the same slot.
+            if (h.parentElement !== content || h !== content.firstElementChild) {
+                content.insertBefore(h, content.firstChild);
+            }
+            if (attached !== h) { attached = h; setHost(h); }
+        };
+
+        ensureHost();
+
+        const observer = new MutationObserver(() => {
+            const ok = attached
+                && attached.isConnected
+                && attached.parentElement?.id === `message-content-${refMessageId}`
+                && attached === attached.parentElement.firstElementChild;
+            if (!ok) ensureHost();
+        });
+        observer.observe(li, { childList: true, subtree: true });
+
+        return () => observer.disconnect();
+    }, [refMessageId]);
+
+    if (!ref || !input) {
+        return <span ref={anchorRef} className="vc-veil-sig-anchor" aria-hidden="true" />;
+    }
+
+    const meta = FLAIR_META[state];
+    const badge = (
+        <button
+            type="button"
+            className={`${meta.className} vc-veil-sig-dot--reply`}
+            onClick={e => {
+                e.stopPropagation();
+                openModal(modalProps => (
+                    <VerifyModal
+                        modalProps={modalProps}
+                        sigRef={ref}
+                        discordMessageId={refMessageId}
+                        channelId={channelId}
+                        authorId={authorId}
+                        strippedContent={strippedContent}
+                        attachmentUrls={attachmentUrls}
+                        authorTag={authorTag}
+                        timestamp={timestamp}
+                    />
+                ));
+            }}
+            title={meta.tooltip}
+            aria-label={meta.tooltip}
+            data-state={state}
+        >
+            <StateGlyph state={state} />
+        </button>
+    );
+
+    return (
+        <>
+            <span ref={anchorRef} className="vc-veil-sig-anchor" aria-hidden="true" />
+            {host && ReactDOM.createPortal(badge, host)}
         </>
     );
 }

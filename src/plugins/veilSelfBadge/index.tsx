@@ -35,6 +35,7 @@ type VeilRole = "developer" | "moderator" | "admin" | "staff" | "system" | "test
 const VEIL_TEAM: Record<string, VeilRole[]> = {
     "287255751368638464": ["developer", "staff"],
     "610961103962505237": ["staff"],
+	"9999900000000000001": ["system"],
 };
 
 const ROLE_META: Record<VeilRole, { label: string; tooltip: string; gradient: string; iconSrc: string; }> = {
