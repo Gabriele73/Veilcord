@@ -25,7 +25,7 @@ import AdminIcon from "file://./badges/Admin.svg?base64&minify";
 import DeveloperIcon from "file://./badges/Developer.svg?base64&minify";
 import ModeratorIcon from "file://./badges/Moderator.svg?base64&minify";
 import StaffIcon from "file://./badges/Staff.svg?base64&minify";
-import SystemIcon from "file://./badges/System.png?base64";
+import SystemIcon from "file://./badges/System.svg?base64&minify";
 import TesterIcon from "file://./badges/Tester.svg?base64&minify";
 
 // veil v0.0.7
