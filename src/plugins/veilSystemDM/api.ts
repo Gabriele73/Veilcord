@@ -5,20 +5,24 @@
  */
 
 import * as DataStore from "@api/DataStore";
+import { proxyLazy } from "@utils/lazy";
 import { findByCodeLazy } from "@webpack";
-import { FluxDispatcher } from "@webpack/common";
+import { FluxDispatcher, UserStore } from "@webpack/common";
 
 /*
- * Discord stores expect real ChannelRecord / MessageRecord instances
- * (with methods like `isPrivate()`, `isBlockedForMessage()`, etc.),
- * not plain objects. Dispatching CHANNEL_CREATE with a plain object
- * crashes the store with "e.isPrivate is not a function". We pull
- * Discord's own factory functions out of the webpack graph and run
- * our raw payloads through them so the resulting instances have the
- * full prototype chain Discord expects.
+ * Discord stores expect real ChannelRecord / MessageRecord / UserRecord
+ * instances (with methods like `isPrivate()`, `isBlockedForMessage()`,
+ * etc.), not plain objects. Dispatching CHANNEL_CREATE with a plain
+ * object crashes the store with "e.isPrivate is not a function" and
+ * the DM list crashes with "PrivateChannel.renderAvatar: no user or
+ * channel" if the recipient isn't a real UserRecord. We pull Discord's
+ * own factories out of the webpack graph and run our raw payloads
+ * through them so the resulting instances have the full prototype
+ * chain Discord expects.
  */
 const createChannelRecordFromServer = findByCodeLazy(".GUILD_TEXT]", "fromServer)");
 const createMessageRecord = findByCodeLazy(".createFromServer(", ".isBlockedForMessage", "messageReference:");
+const UserRecord: any = proxyLazy(() => (UserStore.getCurrentUser() as any).constructor);
 
 /*
  * Synthetic, client-only system DM. Ids use a 19-digit "999"-prefixed
@@ -114,10 +118,22 @@ async function saveMessages(messages: StoredMessage[]): Promise<void> {
 }
 
 /*
+ * Push the synthetic system user into UserStore. Without this, the DM
+ * list's PrivateChannel component crashes on render with
+ * "renderAvatar: no user or channel" because UserStore.getUser returns
+ * undefined for the recipient id.
+ */
+function injectUser(): void {
+    const user = new UserRecord(buildSystemUser());
+    FluxDispatcher.dispatch({ type: "USER_UPDATE", user });
+}
+
+/*
  * Push the channel into ChannelStore / PrivateChannelStore. Idempotent:
  * subsequent CHANNEL_CREATE dispatches are no-ops on the store.
  */
 export function injectChannel(): void {
+    injectUser();
     FluxDispatcher.dispatch({
         type: "CHANNEL_CREATE",
         channel: createChannelRecordFromServer(buildChannel())
