@@ -14,7 +14,7 @@ import {
 } from "@api/MessageEvents";
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { FluxDispatcher, showToast, Toasts } from "@webpack/common";
+import { FluxDispatcher, MessageActions, showToast, Toasts } from "@webpack/common";
 
 import {
     isVeilSystemChannel,
@@ -65,6 +65,37 @@ const blockEdit: MessageEditListener = async channelId => {
     return { cancel: true };
 };
 
+/*
+ * When the user opens our synthetic channel, Discord's
+ * MessageActions.fetchMessages fires an unconditional REST request to
+ * /channels/<id>/messages and 400s on our synthetic id. The failure
+ * leaves ChannelMessages stuck on "loading" and our seeded backlog
+ * never renders. Monkey-patch fetchMessages so calls for our channel
+ * resolve immediately and dispatch LOAD_MESSAGES_SUCCESS from local
+ * storage, while every other channel keeps the original behaviour.
+ */
+let originalFetchMessages: ((args: any) => any) | null = null;
+
+function installFetchMessagesPatch(): void {
+    if (originalFetchMessages) return;
+    const original = (MessageActions as any).fetchMessages?.bind(MessageActions);
+    if (typeof original !== "function") return;
+    originalFetchMessages = original;
+    (MessageActions as any).fetchMessages = function (args: any) {
+        if (args?.channelId === VEIL_SYSTEM_CHANNEL_ID) {
+            void seedMessages();
+            return Promise.resolve();
+        }
+        return original(args);
+    };
+}
+
+function removeFetchMessagesPatch(): void {
+    if (!originalFetchMessages) return;
+    (MessageActions as any).fetchMessages = originalFetchMessages;
+    originalFetchMessages = null;
+}
+
 export default definePlugin({
     name: "VeilSystemDM",
     description: "Synthetic client-only DM with the Veil bot. Other Veil plugins can post tips, warnings, and notices here. Read-only.",
@@ -73,6 +104,7 @@ export default definePlugin({
     dependencies: ["MessageEventsAPI"],
 
     start() {
+        installFetchMessagesPatch();
         addMessagePreSendListener(blockSend);
         addMessagePreEditListener(blockEdit);
         FluxDispatcher.subscribe("CONNECTION_OPEN", onConnectionOpen);
@@ -97,6 +129,7 @@ export default definePlugin({
     },
 
     stop() {
+        removeFetchMessagesPatch();
         removeMessagePreSendListener(blockSend);
         removeMessagePreEditListener(blockEdit);
         FluxDispatcher.unsubscribe("CONNECTION_OPEN", onConnectionOpen);
