@@ -44,6 +44,15 @@ export interface StoredMessage {
 
 let lastInjectedChannel = false;
 
+/*
+ * In-memory queue of non-persisted messages dispatched during this
+ * session (e.g. the boot-time welcome line). seedMessages mixes them
+ * into the LOAD_MESSAGES_SUCCESS payload so that opening the channel
+ * after fetchMessages was short-circuited doesn't wipe transient
+ * notices from the rendered scrollback.
+ */
+const ephemeralMessages: StoredMessage[] = [];
+
 export function buildSystemUser(): any {
     return {
         id: VEIL_SYSTEM_USER_ID,
@@ -154,13 +163,22 @@ export function injectChannel(): void {
  * backlog. Without this, opening the channel triggers a REST fetch
  * to /channels/.../messages which 404s and shows "couldn't load".
  */
+/*
+ * Seed MessageStore for the synthetic channel with the persisted
+ * backlog plus any in-memory ephemeral messages. Always dispatches
+ * LOAD_MESSAGES_SUCCESS, even with an empty array, because that's
+ * what flips ChannelMessages out of its initial pending state and
+ * unblocks rendering. Without this dispatch, opening the channel
+ * after the fetchMessages short-circuit leaves the scroller stuck
+ * on "loading" forever.
+ */
 export async function seedMessages(): Promise<void> {
     const stored = await loadMessages();
-    if (stored.length === 0) return;
+    const all = [...stored, ...ephemeralMessages];
     FluxDispatcher.dispatch({
         type: "LOAD_MESSAGES_SUCCESS",
         channelId: VEIL_SYSTEM_CHANNEL_ID,
-        messages: stored.map(s => createMessageRecord(buildMessage(s))),
+        messages: all.map(s => createMessageRecord(buildMessage(s))),
         isBefore: false,
         isAfter: false,
         hasMoreBefore: false,
@@ -206,6 +224,8 @@ export async function postVeilSystemMessage(
         const existing = await loadMessages();
         existing.push(stored);
         await saveMessages(existing);
+    } else {
+        ephemeralMessages.push(stored);
     }
 
     FluxDispatcher.dispatch({
@@ -219,6 +239,7 @@ export async function postVeilSystemMessage(
 
 export async function clearVeilSystemHistory(): Promise<void> {
     await DataStore.set(MESSAGES_KEY, []);
+    ephemeralMessages.length = 0;
     FluxDispatcher.dispatch({
         type: "LOAD_MESSAGES_SUCCESS",
         channelId: VEIL_SYSTEM_CHANNEL_ID,
