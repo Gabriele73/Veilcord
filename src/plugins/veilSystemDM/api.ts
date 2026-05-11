@@ -35,6 +35,7 @@ export const VEIL_SYSTEM_CHANNEL_ID = "9999900000000000002";
 
 const MESSAGES_KEY = "VeilSystemDM_messages_v1";
 const COUNTER_KEY = "VeilSystemDM_counter_v1";
+const WELCOME_SHOWN_KEY = "VeilSystemDM_welcome_shown_v1";
 
 export interface StoredMessage {
     id: string;
@@ -253,4 +254,21 @@ export async function clearVeilSystemHistory(): Promise<void> {
 
 export function isVeilSystemChannel(channelId: string | null | undefined): boolean {
     return channelId === VEIL_SYSTEM_CHANNEL_ID;
+}
+
+/*
+ * Post the welcome line the first time the user ever boots Veilcord
+ * with this plugin enabled, then never again. The "shown" flag is
+ * keyed in DataStore so the marker survives restarts. The message
+ * itself is persisted normally and lives in the conversation history
+ * like any other entry, so the user can scroll up to it forever.
+ */
+export async function postWelcomeMessageOnce(): Promise<void> {
+    const alreadyShown = await DataStore.get<boolean>(WELCOME_SHOWN_KEY);
+    if (alreadyShown) return;
+    await DataStore.set(WELCOME_SHOWN_KEY, true);
+    await postVeilSystemMessage({
+        content: "Veil is loaded. This channel is where Veil drops tips, warnings, and notices about your keys, signed messages, and E2E sessions. It's read-only, so don't try to reply, the message won't go anywhere.",
+        persist: true
+    });
 }

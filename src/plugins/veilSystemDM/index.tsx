@@ -18,7 +18,7 @@ import { FluxDispatcher, MessageActions, showToast, Toasts } from "@webpack/comm
 
 import {
     isVeilSystemChannel,
-    postVeilSystemMessage,
+    postWelcomeMessageOnce,
     reinject,
     seedMessages,
     VEIL_SYSTEM_CHANNEL_ID
@@ -118,10 +118,7 @@ export default definePlugin({
         setTimeout(async () => {
             try {
                 await reinject();
-                await postVeilSystemMessage({
-                    content: "Veil is loaded. This channel is where Veil drops tips, warnings, and notices about your keys, signed messages, and E2E sessions. It's read-only, so don't try to reply, the message won't go anywhere.",
-                    persist: false
-                });
+                await postWelcomeMessageOnce();
             } catch (e: any) {
                 console.warn("[VeilSystemDM] boot inject failed:", e?.message ?? e);
             }
