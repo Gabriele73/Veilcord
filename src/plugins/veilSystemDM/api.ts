@@ -63,10 +63,18 @@ export function buildSystemUser(): any {
 }
 
 function buildChannel(): any {
+    /*
+     * Discord's CHANNEL_CREATE store handler ingests `recipients` entries
+     * into UserStore. Passing just the recipient id leaves UserStore
+     * empty for that id, and the DM list's PrivateChannel component
+     * crashes on render with "renderAvatar: no user or channel".
+     * Pass the full user object so the recipient is registered as a
+     * side effect of channel injection.
+     */
     return {
         id: VEIL_SYSTEM_CHANNEL_ID,
         type: 1,
-        recipients: [VEIL_SYSTEM_USER_ID],
+        recipients: [buildSystemUser()],
         recipient_ids: [VEIL_SYSTEM_USER_ID],
         last_message_id: null,
         flags: 0,
