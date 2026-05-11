@@ -8,18 +8,13 @@ import { VeilZwc } from "@plugins/veilCrypto";
 
 export interface VeilSigRef {
     v: number;
-    /** v2 backend lookup id. Absent for v3+. */
-    id?: string;
 }
 
 export function extractVeilSigRef(content: unknown): VeilSigRef | null {
     if (typeof content !== "string" || !content) return null;
     const decoded = VeilZwc.decodeRef(content);
     if (!decoded) return null;
-    return {
-        v: decoded.v,
-        id: decoded.id?.toLowerCase()
-    };
+    return { v: decoded.v };
 }
 
 export function stripZwc(content: string): string {

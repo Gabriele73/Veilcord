@@ -12,7 +12,7 @@ import { Divider } from "@components/Divider";
 import { Flex } from "@components/Flex";
 import { HeadingTertiary } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
-import { CanonicalAttachment, cryptoService, veilApiBase, VeilSignedBody } from "@plugins/veilCrypto";
+import { CanonicalAttachment, cryptoService, isBindingActiveAt, veilApiBase, VeilSignedBody } from "@plugins/veilCrypto";
 import { ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, ModalSize } from "@utils/modal";
 import { useEffect, useState } from "@webpack/common";
 
@@ -44,8 +44,6 @@ const REGISTERED_EVENT = "veil:signed-message:registered";
 interface FetchedRecord {
     id: string | null;
     discordMessageId: string | null;
-    /** Server-stored body — only present for v2 legacy records. v3 relies on the live Discord body. */
-    storedMessage: string | null;
     publicKey: string;
     signature: string;
     v: number;
@@ -60,7 +58,6 @@ function normalizeRecord(raw: any): FetchedRecord | null {
     if (!raw || typeof raw !== "object") return null;
     const id = typeof raw.id === "string" ? raw.id.toLowerCase() : null;
     const discordMessageId = typeof raw.discordMessageId === "string" ? raw.discordMessageId : null;
-    const storedMessage = typeof raw.message === "string" ? raw.message : null;
     const publicKey = typeof raw.publicKey === "string" ? raw.publicKey.toLowerCase() : null;
     const signature = typeof raw.signature === "string" ? raw.signature.toLowerCase() : null;
     const v = typeof raw.v === "number" ? raw.v : null;
@@ -71,13 +68,15 @@ function normalizeRecord(raw: any): FetchedRecord | null {
     if (!signature || !HEX128.test(signature)) return null;
     if (v == null) return null;
 
-    return { id, discordMessageId, storedMessage, publicKey, signature, v, submitterPubkey, createdAt };
+    return { id, discordMessageId, publicKey, signature, v, submitterPubkey, createdAt };
 }
 
 export function VerifyModal({
     modalProps,
     sigRef,
     discordMessageId,
+    channelId,
+    authorId,
     strippedContent,
     attachmentUrls,
     authorTag,
@@ -86,6 +85,8 @@ export function VerifyModal({
     modalProps: ModalProps;
     sigRef: VeilSigRef;
     discordMessageId: string | null;
+    channelId: string | null;
+    authorId: string | null;
     strippedContent: string;
     attachmentUrls: string[];
     authorTag?: string;
@@ -95,7 +96,7 @@ export function VerifyModal({
     const [record, setRecord] = useState<FetchedRecord | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [copyHint, setCopyHint] = useState<string | null>(null);
-    /** True iff verification succeeded against the v2 attachments-bound canonical body. */
+    /** True iff verification succeeded against the attachments-bound canonical body. */
     const [attachmentsBound, setAttachmentsBound] = useState<boolean | null>(null);
 
     useEffect(() => {
@@ -103,43 +104,59 @@ export function VerifyModal({
         let attempt = 0;
 
         const buildUrl = (): string | null => {
-            if (sigRef.v === 2 && sigRef.id) {
-                return `${veilApiBase()}/veilcord/signed-message/${encodeURIComponent(sigRef.id)}`;
+            if ((sigRef.v !== 3 && sigRef.v !== 4) || !discordMessageId) return null;
+            return `${veilApiBase()}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
+        };
+
+        const hashAttachmentList = async (): Promise<CanonicalAttachment[] | null> => {
+            const out: CanonicalAttachment[] = [];
+            for (const url of attachmentUrls) {
+                try {
+                    const res = await fetch(url);
+                    if (!res.ok) return null;
+                    const bytes = new Uint8Array(await res.arrayBuffer());
+                    out.push({ sha256Hex: await cryptoService.sha256Hex(bytes) });
+                } catch {
+                    return null;
+                }
             }
-            if (discordMessageId) {
-                return `${veilApiBase()}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
-            }
-            return null;
+            return out;
         };
 
         const verifyRecord = async (normalized: FetchedRecord) => {
             try {
                 let ok = false;
                 let bound: boolean | null = null;
-                // v2 records: canonical body lives on the backend, no
-                // attachment binding existed at sign time. v3 records:
-                // reconstruct canonical body from live message and
-                // attachment hashes; fall back to text-only canonical
-                // for messages signed by older clients that didn't
-                // bind file content.
-                if (sigRef.v === 2 && typeof normalized.storedMessage === "string") {
-                    ok = await cryptoService.verify(normalized.storedMessage, normalized.signature, normalized.publicKey);
-                } else {
-                    if (attachmentUrls.length > 0) {
-                        const hashes: CanonicalAttachment[] = [];
-                        let allHashed = true;
-                        for (const url of attachmentUrls) {
-                            try {
-                                const res = await fetch(url);
-                                if (!res.ok) { allHashed = false; break; }
-                                const bytes = new Uint8Array(await res.arrayBuffer());
-                                hashes.push({ sha256Hex: await cryptoService.sha256Hex(bytes) });
-                            } catch {
-                                allHashed = false;
-                                break;
-                            }
+                if (sigRef.v === 4) {
+                    // v4 binds (mid, cid, uid) into the signed bytes.
+                    // Reconstruct strictly from live message metadata —
+                    // any mismatch (forged record, replayed signature)
+                    // fails verification.
+                    if (!discordMessageId || !channelId || !authorId) {
+                        ok = false;
+                    } else {
+                        const hashes = attachmentUrls.length > 0
+                            ? await hashAttachmentList()
+                            : [];
+                        if (hashes) {
+                            const ctx = {
+                                discordMessageId,
+                                channelId,
+                                senderUid: authorId
+                            };
+                            const canonical = VeilSignedBody.buildCanonicalSignedBodyV4(strippedContent, hashes, ctx);
+                            ok = await cryptoService.verify(canonical, normalized.signature, normalized.publicKey);
+                            if (ok) bound = attachmentUrls.length > 0 ? true : null;
                         }
-                        if (allHashed) {
+                    }
+                } else {
+                    // v3 legacy: rebuild against the v1 canonical body
+                    // (text + optional [veil:atts:v1] block). Falls
+                    // back to text-only canonical for early v3 senders
+                    // that didn't bind file content.
+                    if (attachmentUrls.length > 0) {
+                        const hashes = await hashAttachmentList();
+                        if (hashes) {
                             const canonical = VeilSignedBody.buildCanonicalSignedBody(strippedContent, hashes);
                             ok = await cryptoService.verify(canonical, normalized.signature, normalized.publicKey);
                             if (ok) bound = true;
@@ -152,7 +169,33 @@ export function VerifyModal({
                     }
                 }
                 if (cancelled) return;
-                setStatus(ok ? "valid" : "invalid");
+                if (!ok) {
+                    setStatus("invalid");
+                    setAttachmentsBound(bound);
+                    return;
+                }
+                // v4 hard gate: a valid signature alone proves nothing
+                // about the apparent author. Anyone can sign a canonical
+                // body containing any uid with their own key. Require
+                // publicKey to be bound to authorId at signing time and
+                // treat unbound v4 records as if they didn't exist —
+                // showing the pubkey / signature in the modal would let
+                // graffiti masquerade as a "Signed by …" attribution.
+                if (sigRef.v === 4 && authorId && normalized.createdAt) {
+                    const active = await isBindingActiveAt(
+                        authorId,
+                        normalized.publicKey,
+                        normalized.createdAt
+                    );
+                    if (cancelled) return;
+                    if (!active) {
+                        setRecord(null);
+                        setStatus("missing");
+                        setAttachmentsBound(null);
+                        return;
+                    }
+                }
+                setStatus("valid");
                 setAttachmentsBound(bound);
             } catch (e: any) {
                 if (cancelled) return;
@@ -223,7 +266,7 @@ export function VerifyModal({
             cancelled = true;
             window.removeEventListener(REGISTERED_EVENT, restartFromEvent as EventListener);
         };
-    }, [sigRef.v, sigRef.id, discordMessageId, strippedContent, attachmentUrls.join("|")]);
+    }, [sigRef.v, discordMessageId, channelId, authorId, strippedContent, attachmentUrls.join("|")]);
 
     const copy = (label: string, value: string) => {
         navigator.clipboard.writeText(value).then(() => {
@@ -246,7 +289,7 @@ export function VerifyModal({
         })()
         : null;
 
-    const displayedBody = VeilSignedBody.stripAttachmentBlock(record?.storedMessage ?? strippedContent);
+    const displayedBody = VeilSignedBody.stripAttachmentBlock(strippedContent);
 
     return (
         <ModalRoot {...modalProps} size={ModalSize.MEDIUM} className="vc-veil-modal">

@@ -149,7 +149,9 @@ function DiscordLinkSection({
                         <strong>{formatBindingDate(active.linkedAt)}</strong>.
                     </Paragraph>
                     <Paragraph className="vc-veil-muted" style={{ margin: 0 }}>
-                        Verifying clients can confirm your signed messages were authored by this Discord account.
+                        You can now send signed messages and start end-to-end encrypted DMs.
+                        Other people's clients will recognize your signatures as genuinely
+                        from this account.
                     </Paragraph>
                     <Flex gap={8} style={{ flexWrap: "wrap" }}>
                         <Button variant="secondary" disabled={busy} onClick={onUnlink}>
@@ -160,9 +162,19 @@ function DiscordLinkSection({
             ) : (
                 <Flex flexDirection="column" gap={6}>
                     <Paragraph style={{ margin: 0 }}>
-                        Link this key to your Discord account so others can verify your signed messages
-                        are really from <strong>{discordUid}</strong>. You'll be redirected to Discord to
-                        authorize the <code>identify</code> scope; nothing else is shared.
+                        <strong>Linking is required to send signed or end-to-end encrypted messages.</strong>
+                    </Paragraph>
+                    <Paragraph style={{ margin: 0 }}>
+                        Without it, anyone could make a Veil key and sign a message claiming
+                        to be you. A signature on its own only proves that somebody who holds
+                        this key signed those words. Linking the key to your Discord account
+                        is what tells other people's apps "yes, this key really belongs to
+                        this Discord user", the same way a verified badge on a social profile
+                        proves the username is genuine.
+                    </Paragraph>
+                    <Paragraph className="vc-veil-muted" style={{ margin: 0 }}>
+                        You'll be sent to Discord to authorize the <code>identify</code> scope,
+                        which shares only your numeric user id with Veil. Nothing else.
                     </Paragraph>
                     <Flex gap={8} style={{ flexWrap: "wrap" }}>
                         <Button variant="primary" disabled={busy} onClick={onLink}>

@@ -15,7 +15,7 @@ type FlairState = "loading" | "verified" | "signed" | "invalid" | "unverified";
 
 /**
  * Module-level cache keyed by `<lookup>:<authorId>` where `<lookup>` is either
- * `v2:<backend id>` or `v3:<discord message id>`.
+ * `v3:<discord message id>`.
  *
  * `verified` and `invalid` are stable: a signed-message record never mutates,
  * and a binding's history is append-only, so once we've confirmed the
@@ -55,13 +55,15 @@ function bustCacheForDiscordMessageId(discordMessageId: string) {
 
 interface LookupInput {
     sigRef: VeilSigRef;
-    /** Discord message id — required for v3 lookups. */
+    /** Discord message id — required for the by-discord backend lookup. */
     discordMessageId: string | null;
-    /** Live Discord message content with ZWC stripped — required to verify v3. */
+    /** Discord channel id — bound into the v4 canonical body. */
+    channelId: string | null;
+    /** Live Discord message content with ZWC stripped — verified against the canonical body. */
     strippedContent: string;
     authorId: string | null;
     /** Live attachment URLs in the message, in order. Used to bind file
-     * hashes into the v3 canonical signed body so an image swap breaks
+     * hashes into the canonical signed body so an image swap breaks
      * the signature. Empty array means text-only verify. */
     attachmentUrls: string[];
 }
@@ -110,23 +112,18 @@ function fnv1a32(str: string): string {
     return hash.toString(16).padStart(8, "0");
 }
 
-function lookupKey({ sigRef, discordMessageId, authorId, strippedContent, attachmentUrls }: LookupInput): string | null {
+function lookupKey({ sigRef, discordMessageId, channelId, authorId, strippedContent, attachmentUrls }: LookupInput): string | null {
+    if (sigRef.v !== 3 && sigRef.v !== 4) return null;
+    if (!discordMessageId) return null;
     const attFp = fnv1a32(attachmentUrls.join("|"));
-    if (sigRef.v === 2) return sigRef.id ? `v2:${sigRef.id}:${authorId ?? ""}:${attFp}` : null;
-    if (discordMessageId) return `v3:${discordMessageId}:${authorId ?? ""}:${fnv1a32(strippedContent)}:${attFp}`;
-    return null;
+    return `v${sigRef.v}:${discordMessageId}:${channelId ?? ""}:${authorId ?? ""}:${fnv1a32(strippedContent)}:${attFp}`;
 }
 
 async function fetchRecordOnce(sigRef: VeilSigRef, discordMessageId: string | null): Promise<any | null> {
+    if (sigRef.v !== 3 && sigRef.v !== 4) return null;
+    if (!discordMessageId) return null;
     const base = veilApiBase();
-    let url: string;
-    if (sigRef.v === 2 && sigRef.id) {
-        url = `${base}/veilcord/signed-message/${encodeURIComponent(sigRef.id)}`;
-    } else if (discordMessageId) {
-        url = `${base}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
-    } else {
-        return null;
-    }
+    const url = `${base}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
     const res = await fetch(url, { headers: { Accept: "application/json" } });
     if (!res.ok) return null;
     const raw = await res.json().catch(() => null);
@@ -180,15 +177,33 @@ async function computeFlairState(
             const createdAt = typeof raw.createdAt === "number" ? raw.createdAt : null;
             if (!publicKey || !signature) return "unverified";
 
-            // v2 records ship the canonical body in `raw.message`. v3
-            // reconstructs it live from the message content and (if any)
-            // attachment hashes. For v3 we also fall back to the
-            // text-only canonical so messages signed by older clients
-            // that didn't bind attachments still verify, just without
-            // the file-binding guarantee.
+            // v4: rebuild the canonical body from live message metadata
+            // (mid, cid, uid) plus attachment hashes. The signature
+            // doesn't verify against any other (mid, cid, uid) triple,
+            // so a captured signature can't be reused on a different
+            // message and a forged record posted under the wrong uid
+            // shows up as `invalid`, not `signed`.
+            //
+            // v3 (legacy): rebuild against the legacy v1 canonical
+            // (text + optional [veil:atts:v1] block). Falls back to
+            // text-only canonical for messages signed by older clients
+            // that didn't bind file content.
             let sigOk = false;
-            if (input.sigRef.v === 2 && typeof raw.message === "string") {
-                sigOk = await cryptoService.verify(raw.message, signature, publicKey);
+            if (input.sigRef.v === 4) {
+                if (!input.discordMessageId || !input.channelId || !input.authorId) {
+                    return "unverified";
+                }
+                const ctx = {
+                    discordMessageId: input.discordMessageId,
+                    channelId: input.channelId,
+                    senderUid: input.authorId
+                };
+                const hashes = input.attachmentUrls.length > 0
+                    ? await hashAllAttachments(input.attachmentUrls)
+                    : [];
+                if (!hashes) return "unverified";
+                const canonical = VeilSignedBody.buildCanonicalSignedBodyV4(input.strippedContent, hashes, ctx);
+                sigOk = await cryptoService.verify(canonical, signature, publicKey);
             } else {
                 if (input.attachmentUrls.length > 0) {
                     const hashes = await hashAllAttachments(input.attachmentUrls);
@@ -204,9 +219,24 @@ async function computeFlairState(
             }
             if (!sigOk) return "invalid";
 
-            if (!input.authorId || createdAt == null) return "signed";
+            if (!input.authorId || createdAt == null) {
+                // v4 binds the canonical body to the author uid, but if
+                // the live message is missing an author id we can't
+                // confirm the binding — treat as missing rather than
+                // showing a misleading "signed".
+                return input.sigRef.v === 4 ? "unverified" : "signed";
+            }
 
             const active = await isBindingActiveAt(input.authorId, publicKey, createdAt);
+
+            // v4 hard gate: a valid signature alone is not enough.
+            // Anyone can mint a signature claiming any sender uid by
+            // signing the matching canonical body with their own key,
+            // so we require publicKey to actually be bound to the
+            // author's discord uid at signing time. Records that fail
+            // this check are graffiti — render as if no record existed.
+            if (input.sigRef.v === 4 && !active) return "unverified";
+
             return active ? "verified" : "signed";
         } catch {
             return "unverified";
@@ -292,6 +322,7 @@ export function VeilSigBadge({ message }: { message: any; }) {
         : undefined;
     const authorId: string | null = message?.author?.id ?? null;
     const discordMessageId: string | null = typeof message?.id === "string" ? message.id : null;
+    const channelId: string | null = typeof message?.channel_id === "string" ? message.channel_id : null;
     const strippedContent = stripZwc(typeof message?.content === "string" ? message.content : "");
     const attachmentUrls: string[] = Array.isArray(message?.attachments)
         ? message.attachments.map((a: any) => (typeof a?.url === "string" ? a.url : "")).filter(Boolean)
@@ -310,7 +341,7 @@ export function VeilSigBadge({ message }: { message: any; }) {
         }
     })();
 
-    const input: LookupInput = { sigRef: ref, discordMessageId, strippedContent, authorId, attachmentUrls };
+    const input: LookupInput = { sigRef: ref, discordMessageId, channelId, strippedContent, authorId, attachmentUrls };
     const cacheKey = lookupKey(input);
 
     const [state, setState] = useState<FlairState>(() => {
@@ -336,7 +367,7 @@ export function VeilSigBadge({ message }: { message: any; }) {
             const detail = (e as CustomEvent).detail;
             if (!detail || typeof detail.discordMessageId !== "string") return;
             if (detail.discordMessageId !== discordMessageId) return;
-            bustCacheForDiscordMessageId(discordMessageId);
+            bustCacheForDiscordMessageId(discordMessageId!);
             setState("loading");
             run();
         };
@@ -346,7 +377,7 @@ export function VeilSigBadge({ message }: { message: any; }) {
             cancelled = true;
             window.removeEventListener(REGISTERED_EVENT, onRegistered as EventListener);
         };
-    }, [ref.v, ref.id, discordMessageId, authorId, strippedContent, attachmentUrls.join("|")]);
+    }, [ref.v, discordMessageId, channelId, authorId, strippedContent, attachmentUrls.join("|")]);
 
     const meta = FLAIR_META[state];
 
@@ -432,6 +463,8 @@ export function VeilSigBadge({ message }: { message: any; }) {
                         modalProps={modalProps}
                         sigRef={ref}
                         discordMessageId={discordMessageId}
+                        channelId={channelId}
+                        authorId={authorId}
                         strippedContent={strippedContent}
                         attachmentUrls={attachmentUrls}
                         authorTag={authorTag}

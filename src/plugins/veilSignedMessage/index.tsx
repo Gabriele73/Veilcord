@@ -10,7 +10,7 @@ import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
 import { FluxDispatcher, MessageStore, showToast, Toasts, useEffect, UserStore, useState } from "@webpack/common";
 
-import { CanonicalAttachment, cryptoService, veilApiBase, VeilSignedBody, VeilZwc } from "@plugins/veilCrypto";
+import { CanonicalAttachment, cryptoService, getActiveBindingForUid, veilApiBase, VeilSignedBody, VeilZwc } from "@plugins/veilCrypto";
 import { SignIcon } from "./SignIcon";
 
 // veil v0.0.2
@@ -22,20 +22,8 @@ let lastEnabled = false;
 interface Pending {
     /** Final Discord content (visible body + ZWC marker) — used to match the MESSAGE_CREATE event. */
     matchContent: string;
-    /**
-     * For text-only messages we sign in pre-send and ship the canonical
-     * body + signature here. For messages with attachments we can't sign
-     * yet because Discord may re-encode images (PNG → WebP) inside its
-     * CloudUpload pipeline and `upload.item.file` is never mutated, so
-     * any hash we compute pre-send won't match what the CDN serves. In
-     * that case we leave these null and let `onMessageCreate` reach
-     * across to the live `message.attachments[].url`, hash the served
-     * bytes, build the canonical body, sign, and register.
-     */
-    signedBody: string | null;
     publicKey: string;
-    signature: string | null;
-    /** Plain text the user typed, with no ZWC marker. Required for late binding. */
+    /** Plain text the user typed, including the trailing space that fences the ZWC marker. */
     plainText: string;
     /** True iff this message had attachments at send-time and needs late hashing. */
     needsAttachmentBinding: boolean;
@@ -44,6 +32,28 @@ interface Pending {
 
 const PENDING_TTL_MS = 30_000;
 const pendingByChannel = new Map<string, Pending[]>();
+
+/**
+ * v4 signed records are only accepted by the backend, and only render
+ * a badge on other people's clients, when the signing pubkey is OAuth
+ * bound to the canonical sender uid. So we refuse to sign at all
+ * unless the user's current active key is bound to their current
+ * Discord account.
+ */
+async function hasActiveBindingForCurrentKey(): Promise<boolean> {
+    try {
+        const me = UserStore.getCurrentUser?.();
+        const uid = me?.id;
+        if (!uid) return false;
+        if (!(await cryptoService.hasStoredKey())) return false;
+        const ourPub = (await cryptoService.getPublicKey()).toLowerCase();
+        const binding = await getActiveBindingForUid(uid);
+        if (!binding?.publicKey) return false;
+        return binding.publicKey.toLowerCase() === ourPub;
+    } catch {
+        return false;
+    }
+}
 
 function pushPending(channelId: string, entry: Pending) {
     const queue = pendingByChannel.get(channelId) ?? [];
@@ -142,21 +152,26 @@ async function hashAttachmentsFromMessage(message: any): Promise<CanonicalAttach
 }
 
 async function finalizeAndRegister(message: any, pending: Pending): Promise<void> {
-    let signedBody = pending.signedBody;
-    let signature = pending.signature;
-    const publicKey = pending.publicKey;
-
-    if (pending.needsAttachmentBinding || !signedBody || !signature) {
-        const hashes = await hashAttachmentsFromMessage(message);
-        signedBody = VeilSignedBody.buildCanonicalSignedBody(pending.plainText, hashes);
-        signature = await cryptoService.sign(signedBody);
+    const me = UserStore.getCurrentUser?.();
+    const senderUid = message?.author?.id ?? me?.id;
+    const channelId = message?.channel_id;
+    const discordMessageId = message?.id;
+    if (!senderUid || !channelId || !discordMessageId) {
+        throw new Error("missing context for v4 canonical body");
     }
 
-    await registerOnBackend(message.id, signedBody!, publicKey, signature!);
+    const hashes = pending.needsAttachmentBinding
+        ? await hashAttachmentsFromMessage(message)
+        : [];
+    const ctx = { discordMessageId, channelId, senderUid };
+    const signedBody = VeilSignedBody.buildCanonicalSignedBodyV4(pending.plainText, hashes, ctx);
+    const signature = await cryptoService.sign(signedBody);
+
+    await registerOnBackend(discordMessageId, signedBody, pending.publicKey, signature);
 
     try {
         window.dispatchEvent(new CustomEvent("veil:signed-message:registered", {
-            detail: { discordMessageId: message.id }
+            detail: { discordMessageId }
         }));
     } catch { /* ignore */ }
 }
@@ -172,7 +187,18 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
     try {
         if (!await cryptoService.hasStoredKey()) {
             lastEnabled = false;
+            try { window.dispatchEvent(new CustomEvent(SIGN_LOCAL_TOGGLE_EVENT, { detail: { enabled: false } })); } catch { /* ignore */ }
             showToast("Sign mode off: link a Veil key first.", Toasts.Type.FAILURE);
+            return { cancel: true };
+        }
+
+        if (!(await hasActiveBindingForCurrentKey())) {
+            lastEnabled = false;
+            try { window.dispatchEvent(new CustomEvent(SIGN_LOCAL_TOGGLE_EVENT, { detail: { enabled: false } })); } catch { /* ignore */ }
+            showToast(
+                "Link this key to your Discord account before signing. Open the Veil key panel and click \"Link to Discord\".",
+                Toasts.Type.FAILURE
+            );
             return { cancel: true };
         }
 
@@ -198,24 +224,14 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
 
         messageObj.content = finalContent;
 
-        // Text-only messages: sign now and ship the canonical body in
-        // the pending entry. Messages with attachments: defer signing
-        // to MESSAGE_CREATE, where we can hash the bytes Discord
-        // actually published to the CDN (which may differ from the
-        // bytes on disk if Discord re-encoded a PNG to WebP inside
-        // its CloudUpload pipeline).
-        let signedBody: string | null = null;
-        let signature: string | null = null;
-        if (uploads.length === 0) {
-            signedBody = VeilSignedBody.buildCanonicalSignedBody(visibleBody, []);
-            signature = await cryptoService.sign(signedBody);
-        }
-
+        // v4 canonical bodies bind the Discord message id, channel id
+        // and sender uid into the signed bytes. The message id only
+        // exists after Discord assigns one, so we always defer signing
+        // to MESSAGE_CREATE — for both text-only and attachment-bearing
+        // messages.
         pushPending(channelId, {
             matchContent: finalContent,
-            signedBody,
             publicKey,
-            signature,
             plainText: visibleBody,
             needsAttachmentBinding: uploads.length > 0,
             expiresAt: Date.now() + PENDING_TTL_MS
@@ -290,12 +306,20 @@ const VeilSignButton: ChatBarButtonFactory = ({ isMainChat }) => {
     return (
         <ChatBarButton
             tooltip={tooltip}
-            onClick={() => {
-                setEnabled(prev => {
-                    const next = !prev;
-                    if (next) broadcastSignOn();
-                    return next;
-                });
+            onClick={async () => {
+                const next = !enabled;
+                if (next) {
+                    const allowed = await hasActiveBindingForCurrentKey();
+                    if (!allowed) {
+                        showToast(
+                            "Link this key to your Discord account first to enable sign mode.",
+                            Toasts.Type.FAILURE
+                        );
+                        return;
+                    }
+                    broadcastSignOn();
+                }
+                setEnabled(next);
             }}
             buttonProps={{ "aria-pressed": enabled } as any}
         >
