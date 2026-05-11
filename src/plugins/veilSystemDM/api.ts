@@ -5,7 +5,20 @@
  */
 
 import * as DataStore from "@api/DataStore";
+import { findByCodeLazy } from "@webpack";
 import { FluxDispatcher } from "@webpack/common";
+
+/*
+ * Discord stores expect real ChannelRecord / MessageRecord instances
+ * (with methods like `isPrivate()`, `isBlockedForMessage()`, etc.),
+ * not plain objects. Dispatching CHANNEL_CREATE with a plain object
+ * crashes the store with "e.isPrivate is not a function". We pull
+ * Discord's own factory functions out of the webpack graph and run
+ * our raw payloads through them so the resulting instances have the
+ * full prototype chain Discord expects.
+ */
+const createChannelRecordFromServer = findByCodeLazy(".GUILD_TEXT]", "fromServer)");
+const createMessageRecord = findByCodeLazy(".createFromServer(", ".isBlockedForMessage", "messageReference:");
 
 /*
  * Synthetic, client-only system DM. Ids use a 19-digit "999"-prefixed
@@ -107,7 +120,7 @@ async function saveMessages(messages: StoredMessage[]): Promise<void> {
 export function injectChannel(): void {
     FluxDispatcher.dispatch({
         type: "CHANNEL_CREATE",
-        channel: buildChannel()
+        channel: createChannelRecordFromServer(buildChannel())
     });
     lastInjectedChannel = true;
 }
@@ -123,7 +136,7 @@ export async function seedMessages(): Promise<void> {
     FluxDispatcher.dispatch({
         type: "LOAD_MESSAGES_SUCCESS",
         channelId: VEIL_SYSTEM_CHANNEL_ID,
-        messages: stored.map(buildMessage),
+        messages: stored.map(s => createMessageRecord(buildMessage(s))),
         isBefore: false,
         isAfter: false,
         hasMoreBefore: false,
@@ -174,7 +187,7 @@ export async function postVeilSystemMessage(
     FluxDispatcher.dispatch({
         type: "MESSAGE_CREATE",
         channelId: VEIL_SYSTEM_CHANNEL_ID,
-        message: buildMessage(stored),
+        message: createMessageRecord(buildMessage(stored)),
         optimistic: false,
         isPushNotification: false
     });
