@@ -69,6 +69,7 @@ export interface VeilE2eContext {
     senderUid: string;
     recipientUid: string;
     channelId: string;
+    discordMessageId?: string;
 }
 
 interface E2eSlot {
@@ -85,7 +86,7 @@ interface ParsedE2eEnvelope {
 }
 
 function buildE2ePayloadAad(ctx: VeilE2eContext): Uint8Array {
-    const s = `${ctx.senderUid}\n${ctx.recipientUid}\n${ctx.channelId}`;
+    const s = `${ctx.senderUid}\n${ctx.recipientUid}\n${ctx.channelId}\n${ctx.discordMessageId || ''}`;
     const body = new TextEncoder().encode(s);
     const out = new Uint8Array(PAYLOAD_AAD_TAG.length + body.length);
     out.set(PAYLOAD_AAD_TAG, 0);
@@ -865,7 +866,7 @@ export class CryptoService {
 
         return {
             format: "veil-key-backup",
-            version: 1,
+            version: 2,
             exportedAt: exportTimestamp,
             kdf: { name: "PBKDF2", hash: "SHA-256", iterations: BACKUP_KDF_ITERATIONS, salt: bytesToBase64(salt) },
             cipher: { name: "AES-GCM", iv: bytesToBase64(iv) },
@@ -878,7 +879,7 @@ export class CryptoService {
         if (!password || typeof password !== "string") throw new Error("Password is required");
         const payload = typeof backupPayload === "string" ? JSON.parse(backupPayload) : backupPayload;
         if (!payload || typeof payload !== "object") throw new Error("Invalid backup format");
-        if (payload.format !== "veil-key-backup" || payload.version !== 1) throw new Error("Unsupported backup format");
+        if (payload.format !== "veil-key-backup" || ![1, 2].includes(payload.version)) throw new Error("Unsupported backup format");
 
         const iterations = Number(payload?.kdf?.iterations);
         const saltB64 = payload?.kdf?.salt;

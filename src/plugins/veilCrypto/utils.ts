@@ -21,7 +21,7 @@ export const TRUSTED_UNLOCK_LEASE_MS = 30 * 24 * 60 * 60 * 1000;
 export const VAULT_KEY_BYTES = 32;
 export const VAULT_IV_BYTES = 12;
 
-export const BACKUP_KDF_ITERATIONS = 250000;
+export const BACKUP_KDF_ITERATIONS = 600000; // OWASP 2023 recommendation
 export const BACKUP_SALT_BYTES = 16;
 export const BACKUP_IV_BYTES = 12;
 
