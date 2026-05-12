@@ -69,7 +69,6 @@ export interface VeilE2eContext {
     senderUid: string;
     recipientUid: string;
     channelId: string;
-    discordMessageId?: string;
 }
 
 interface E2eSlot {
@@ -86,7 +85,7 @@ interface ParsedE2eEnvelope {
 }
 
 function buildE2ePayloadAad(ctx: VeilE2eContext): Uint8Array {
-    const s = `${ctx.senderUid}\n${ctx.recipientUid}\n${ctx.channelId}\n${ctx.discordMessageId || ''}`;
+    const s = `${ctx.senderUid}\n${ctx.recipientUid}\n${ctx.channelId}`;
     const body = new TextEncoder().encode(s);
     const out = new Uint8Array(PAYLOAD_AAD_TAG.length + body.length);
     out.set(PAYLOAD_AAD_TAG, 0);
@@ -1074,8 +1073,7 @@ export class CryptoService {
             const payloadAad = buildE2ePayloadAad(ctx);
             const plainBytes = await crypto.subtle.decrypt(
                 { name: "AES-GCM", iv: parsed.payloadIv as BufferSource, additionalData: payloadAad as BufferSource },
-                contentKey,
-                parsed.payload as BufferSource
+                conte             parsed.payload as BufferSource
             );
             return new TextDecoder().decode(plainBytes);
         } catch {

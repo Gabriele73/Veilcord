@@ -692,8 +692,7 @@ async function decryptAndCommit(messageId: string): Promise<void> {
     const plaintext = await cryptoService.tryDecryptFromSender(envelope, {
         senderUid,
         recipientUid,
-        channelId,
-        discordMessageId: messageId
+        channelId
     });
     if (plaintext == null) {
         await commitPlaceholder(channelId, messageId, "failed");
