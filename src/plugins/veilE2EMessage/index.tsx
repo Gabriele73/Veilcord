@@ -69,6 +69,24 @@ function broadcastE2eOn() {
     try { window.dispatchEvent(new CustomEvent(MODE_E2E_ON_EVENT)); } catch { /* ignore */ }
 }
 
+/*
+ * Mode-picker bridge.
+ *
+ * `VeilModePicker` owns the unified chatbar UI and dispatches
+ * `veil-mode:request-e2e` with `{ channelId, enabled }` when the user
+ * picks E2E mode for a channel. We respond by toggling per-channel
+ * state and broadcasting MODE_E2E_ON_EVENT (which disables sign mode
+ * if it was on). Picker also listens to `veil-e2e:toggle` to stay in
+ * sync with auto-disables (failed encrypt, mode collision, etc).
+ */
+function onModeRequestE2e(event: Event) {
+    const detail = (event as CustomEvent).detail;
+    if (!detail || typeof detail.channelId !== "string") return;
+    const next = Boolean(detail.enabled);
+    setEnabled(detail.channelId, next);
+    if (next) broadcastE2eOn();
+}
+
 function disableAllE2eChannels() {
     const channelIds = Array.from(enabledByChannel.keys());
     for (const cid of channelIds) setEnabled(cid, false);
@@ -1088,7 +1106,6 @@ export default definePlugin({
     encryptCloudUploadIfNeeded,
 
     start() {
-        addChatBarButton(BUTTON_ID, VeilE2EButton, LockIcon);
         addMessagePreSendListener(sendListener);
         addMessagePreEditListener(editListener);
         addMessageAccessory(ACCESSORY_ID, E2eAccessoryHost, -1);
@@ -1100,11 +1117,11 @@ export default definePlugin({
         FluxDispatcher.subscribe("MESSAGE_DELETE_BULK", onMessageDelete);
         window.addEventListener("veilcrypto:state-change", onVaultStateChange);
         window.addEventListener(MODE_SIGN_ON_EVENT, disableAllE2eChannels);
+        window.addEventListener("veil-mode:request-e2e", onModeRequestE2e as EventListener);
         document.addEventListener("click", onAttachmentDownloadClick, true);
     },
 
     stop() {
-        removeChatBarButton(BUTTON_ID);
         removeMessagePreSendListener(sendListener);
         removeMessagePreEditListener(editListener);
         removeMessageAccessory(ACCESSORY_ID);
@@ -1116,6 +1133,7 @@ export default definePlugin({
         FluxDispatcher.unsubscribe("MESSAGE_DELETE_BULK", onMessageDelete);
         window.removeEventListener("veilcrypto:state-change", onVaultStateChange);
         window.removeEventListener(MODE_SIGN_ON_EVENT, disableAllE2eChannels);
+        window.removeEventListener("veil-mode:request-e2e", onModeRequestE2e as EventListener);
         document.removeEventListener("click", onAttachmentDownloadClick, true);
         enabledByChannel.clear();
         pendingByMessageId.clear();

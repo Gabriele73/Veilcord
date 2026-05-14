@@ -18,6 +18,7 @@ import { PluginNative } from "@utils/types";
 import { useEffect, useState } from "@webpack/common";
 
 import { VeilSigRef } from "./parser";
+import * as recordCache from "./recordCache";
 
 const Native = VencordNative.pluginHelpers.VeilVerifySignedMessage as PluginNative<typeof import("./native")>;
 
@@ -200,6 +201,31 @@ export function VerifyModal({
                 setErrorMsg("No lookup key for this signature.");
                 return;
             }
+            // Persistent cache: a `hit` is good forever (records are
+            // immutable); a `miss` is honored within its TTL so we
+            // don't replay the retry ladder for a record we already
+            // confirmed isn't there yet. The MESSAGE_REGISTERED event
+            // invalidates the cached entry on the sender's own client
+            // so a freshly-registered record surfaces immediately.
+            if (discordMessageId) {
+                const persisted = await recordCache.readRecord(discordMessageId);
+                if (cancelled) return;
+                if (persisted) {
+                    if (persisted.kind === "hit") {
+                        const normalized = normalizeRecord(persisted.record);
+                        if (normalized) {
+                            setRecord(normalized);
+                            setStatus("verifying");
+                            await verifyRecord(normalized);
+                            return;
+                        }
+                    } else {
+                        setStatus("missing");
+                        setErrorMsg(null);
+                        return;
+                    }
+                }
+            }
             try {
                 const res = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
                 if (cancelled) return;
@@ -210,6 +236,7 @@ export function VerifyModal({
                         setTimeout(() => { if (!cancelled) void tryFetch(); }, FETCH_RETRY_DELAYS_MS[attempt]);
                         return;
                     }
+                    if (discordMessageId) void recordCache.writeMiss(discordMessageId);
                     setStatus("missing");
                     setErrorMsg(null);
                     return;
@@ -229,6 +256,7 @@ export function VerifyModal({
                     setErrorMsg("Backend returned a malformed signed-message record.");
                     return;
                 }
+                if (discordMessageId) void recordCache.writeHit(discordMessageId, raw);
                 setRecord(normalized);
                 setStatus("verifying");
                 await verifyRecord(normalized);
@@ -243,6 +271,7 @@ export function VerifyModal({
             const detail = (e as CustomEvent).detail;
             if (!detail || detail.discordMessageId !== discordMessageId) return;
             attempt = 0;
+            if (discordMessageId) void recordCache.invalidate(discordMessageId);
             setStatus("loading");
             setErrorMsg(null);
             setRecord(null);

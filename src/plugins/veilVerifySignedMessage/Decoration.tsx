@@ -10,6 +10,7 @@ import { PluginNative } from "@utils/types";
 import { MessageStore, ReactDOM, useEffect, useLayoutEffect, useRef, useState, useStateFromStores } from "@webpack/common";
 
 import { extractVeilSigRef, stripZwc, VeilSigRef } from "./parser";
+import * as recordCache from "./recordCache";
 import { VerifyModal } from "./VerifyModal";
 
 const Native = VencordNative.pluginHelpers.VeilVerifySignedMessage as PluginNative<typeof import("./native")>;
@@ -50,10 +51,11 @@ const FETCH_RETRY_DELAYS_MS = [0, 1500, 4000, 9000, 18000];
 const REGISTERED_EVENT = "veil:signed-message:registered";
 
 function bustCacheForDiscordMessageId(discordMessageId: string) {
-    const prefix = `v3:${discordMessageId}:`;
+    const prefix = `v4:${discordMessageId}:`;
     for (const key of Array.from(flairCache.keys())) {
         if (key.startsWith(prefix)) flairCache.delete(key);
     }
+    void recordCache.invalidate(discordMessageId);
 }
 
 interface LookupInput {
@@ -127,12 +129,27 @@ function lookupKey({ sigRef, discordMessageId, channelId, authorId, strippedCont
 async function fetchRecordOnce(sigRef: VeilSigRef, discordMessageId: string | null): Promise<any | null> {
     if (sigRef.v !== 4) return null;
     if (!discordMessageId) return null;
+
+    // Try the persistent IndexedDB cache first. Records are immutable
+    // once written, so a `hit` is good forever; a `miss` is honored
+    // only within its TTL so late-arriving records eventually surface.
+    const persisted = await recordCache.readRecord(discordMessageId);
+    if (persisted) {
+        if (persisted.kind === "hit") return persisted.record;
+        if (persisted.kind === "miss") return null;
+    }
+
     const base = veilApiBase();
     const url = `${base}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
     const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (res.status === 404) {
+        void recordCache.writeMiss(discordMessageId);
+        return null;
+    }
     if (!res.ok) return null;
     const raw = await res.json().catch(() => null);
     if (!raw || typeof raw !== "object") return null;
+    void recordCache.writeHit(discordMessageId, raw);
     return raw;
 }
 

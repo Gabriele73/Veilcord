@@ -11,6 +11,7 @@ import definePlugin, { PluginNative } from "@utils/types";
 import { FluxDispatcher, MessageStore, showToast, Toasts, useEffect, UserStore, useState } from "@webpack/common";
 
 import { CanonicalAttachment, cryptoService, getActiveBindingForUid, veilApiBase, VeilSignedBody, VeilZwc } from "@plugins/veilCrypto";
+import VeilLinkKeyPlugin from "@plugins/veilLinkKey";
 import { SignIcon } from "./SignIcon";
 
 const Native = VencordNative.pluginHelpers.VeilSignedMessage as PluginNative<typeof import("./native")>;
@@ -192,17 +193,16 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
         if (!await cryptoService.hasStoredKey()) {
             lastEnabled = false;
             try { window.dispatchEvent(new CustomEvent(SIGN_LOCAL_TOGGLE_EVENT, { detail: { enabled: false } })); } catch { /* ignore */ }
-            showToast("Sign mode off: link a Veil key first.", Toasts.Type.FAILURE);
+            showToast("Sign mode off. Set up a Veil key first.", Toasts.Type.FAILURE);
+            try { VeilLinkKeyPlugin.openLinkKeyModal(); } catch { /* ignore */ }
             return { cancel: true };
         }
 
         if (!(await hasActiveBindingForCurrentKey())) {
             lastEnabled = false;
             try { window.dispatchEvent(new CustomEvent(SIGN_LOCAL_TOGGLE_EVENT, { detail: { enabled: false } })); } catch { /* ignore */ }
-            showToast(
-                "Link this key to your Discord account before signing. Open the Veil key panel and click \"Link to Discord\".",
-                Toasts.Type.FAILURE
-            );
+            showToast("Link this key to your Discord account to sign messages.", Toasts.Type.FAILURE);
+            try { VeilLinkKeyPlugin.openLinkKeyModal(); } catch { /* ignore */ }
             return { cancel: true };
         }
 
@@ -323,9 +323,10 @@ const VeilSignButton: ChatBarButtonFactory = ({ isMainChat }) => {
                     const allowed = await hasActiveBindingForCurrentKey();
                     if (!allowed) {
                         showToast(
-                            "Link this key to your Discord account first to enable sign mode.",
+                            "Link this key to your Discord account first.",
                             Toasts.Type.FAILURE
                         );
+                        try { VeilLinkKeyPlugin.openLinkKeyModal(); } catch { /* ignore */ }
                         return;
                     }
                     broadcastSignOn();
@@ -348,6 +349,32 @@ const VeilSignButton: ChatBarButtonFactory = ({ isMainChat }) => {
     );
 };
 
+/*
+ * Mode-picker bridge.
+ *
+ * `VeilModePicker` owns the unified chatbar UI. When the user picks
+ * "signed" we receive `veil-mode:request-sign` with `{ enabled }`,
+ * preflight the binding (and surface the link modal if missing), then
+ * apply the toggle the same way the legacy chatbar button did.
+ */
+async function onModeRequestSign(event: Event) {
+    const detail = (event as CustomEvent).detail;
+    if (!detail) return;
+    const next = Boolean(detail.enabled);
+    if (next) {
+        const allowed = await hasActiveBindingForCurrentKey();
+        if (!allowed) {
+            showToast("Link this key to your Discord account first.", Toasts.Type.FAILURE);
+            try { VeilLinkKeyPlugin.openLinkKeyModal(); } catch { /* ignore */ }
+            try { window.dispatchEvent(new CustomEvent(SIGN_LOCAL_TOGGLE_EVENT, { detail: { enabled: false } })); } catch { /* ignore */ }
+            return;
+        }
+        broadcastSignOn();
+    }
+    lastEnabled = next;
+    try { window.dispatchEvent(new CustomEvent(SIGN_LOCAL_TOGGLE_EVENT, { detail: { enabled: next } })); } catch { /* ignore */ }
+}
+
 export default definePlugin({
     name: "VeilSignedMessage",
     description: "Adds a chatbar toggle that signs every outgoing message with your Veil Ed25519 key. The signature lands on the Veil backend, keyed by the Discord message id.",
@@ -356,19 +383,19 @@ export default definePlugin({
     required: true,
 
     start() {
-        addChatBarButton(BUTTON_ID, VeilSignButton, SignIcon);
         addMessagePreSendListener(sendListener);
         addMessagePreEditListener(editListener);
         FluxDispatcher.subscribe("MESSAGE_CREATE", onMessageCreate);
         window.addEventListener(MODE_E2E_ON_EVENT, disableSignMode);
+        window.addEventListener("veil-mode:request-sign", onModeRequestSign as EventListener);
     },
 
     stop() {
-        removeChatBarButton(BUTTON_ID);
         removeMessagePreSendListener(sendListener);
         removeMessagePreEditListener(editListener);
         FluxDispatcher.unsubscribe("MESSAGE_CREATE", onMessageCreate);
         window.removeEventListener(MODE_E2E_ON_EVENT, disableSignMode);
+        window.removeEventListener("veil-mode:request-sign", onModeRequestSign as EventListener);
         pendingByChannel.clear();
         lastEnabled = false;
     }
