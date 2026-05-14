@@ -107,7 +107,7 @@ export function VerifyModal({
         let attempt = 0;
 
         const buildUrl = (): string | null => {
-            if ((sigRef.v !== 3 && sigRef.v !== 4) || !discordMessageId) return null;
+            if (sigRef.v !== 4 || !discordMessageId) return null;
             return `${veilApiBase()}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
         };
 
@@ -132,45 +132,29 @@ export function VerifyModal({
             try {
                 let ok = false;
                 let bound: boolean | null = null;
-                if (sigRef.v === 4) {
-                    // v4 binds (mid, cid, uid) into the signed bytes.
-                    // Reconstruct strictly from live message metadata —
-                    // any mismatch (forged record, replayed signature)
-                    // fails verification.
-                    if (!discordMessageId || !channelId || !authorId) {
-                        ok = false;
-                    } else {
-                        const hashes = attachmentUrls.length > 0
-                            ? await hashAttachmentList()
-                            : [];
-                        if (hashes) {
-                            const ctx = {
-                                discordMessageId,
-                                channelId,
-                                senderUid: authorId
-                            };
-                            const canonical = VeilSignedBody.buildCanonicalSignedBodyV4(strippedContent, hashes, ctx);
-                            ok = await cryptoService.verify(canonical, normalized.signature, normalized.publicKey);
-                            if (ok) bound = attachmentUrls.length > 0 ? true : null;
-                        }
-                    }
+                // v4 only: rebuilds (mid, cid, uid) + attachment hashes
+                // from live message metadata. v3 inserts are no longer
+                // accepted server-side and v3 records are not rendered.
+                if (sigRef.v !== 4) {
+                    setStatus("invalid");
+                    setAttachmentsBound(null);
+                    return;
+                }
+                if (!discordMessageId || !channelId || !authorId) {
+                    ok = false;
                 } else {
-                    // v3 legacy: rebuild against the v1 canonical body
-                    // (text + optional [veil:atts:v1] block). Falls
-                    // back to text-only canonical for early v3 senders
-                    // that didn't bind file content.
-                    if (attachmentUrls.length > 0) {
-                        const hashes = await hashAttachmentList();
-                        if (hashes) {
-                            const canonical = VeilSignedBody.buildCanonicalSignedBody(strippedContent, hashes);
-                            ok = await cryptoService.verify(canonical, normalized.signature, normalized.publicKey);
-                            if (ok) bound = true;
-                        }
-                    }
-                    if (!ok) {
-                        const legacy = VeilSignedBody.buildCanonicalSignedBody(strippedContent, []);
-                        ok = await cryptoService.verify(legacy, normalized.signature, normalized.publicKey);
-                        if (ok && attachmentUrls.length > 0) bound = false;
+                    const hashes = attachmentUrls.length > 0
+                        ? await hashAttachmentList()
+                        : [];
+                    if (hashes) {
+                        const ctx = {
+                            discordMessageId,
+                            channelId,
+                            senderUid: authorId
+                        };
+                        const canonical = VeilSignedBody.buildCanonicalSignedBodyV4(strippedContent, hashes, ctx);
+                        ok = await cryptoService.verify(canonical, normalized.signature, normalized.publicKey);
+                        if (ok) bound = attachmentUrls.length > 0 ? true : null;
                     }
                 }
                 if (cancelled) return;
@@ -186,7 +170,7 @@ export function VerifyModal({
                 // treat unbound v4 records as if they didn't exist —
                 // showing the pubkey / signature in the modal would let
                 // graffiti masquerade as a "Signed by …" attribution.
-                if (sigRef.v === 4 && authorId && normalized.createdAt) {
+                if (authorId && normalized.createdAt) {
                     const active = await isBindingActiveAt(
                         authorId,
                         normalized.publicKey,

@@ -118,14 +118,14 @@ function fnv1a32(str: string): string {
 }
 
 function lookupKey({ sigRef, discordMessageId, channelId, authorId, strippedContent, attachmentUrls }: LookupInput): string | null {
-    if (sigRef.v !== 3 && sigRef.v !== 4) return null;
+    if (sigRef.v !== 4) return null;
     if (!discordMessageId) return null;
     const attFp = fnv1a32(attachmentUrls.join("|"));
     return `v${sigRef.v}:${discordMessageId}:${channelId ?? ""}:${authorId ?? ""}:${fnv1a32(strippedContent)}:${attFp}`;
 }
 
 async function fetchRecordOnce(sigRef: VeilSigRef, discordMessageId: string | null): Promise<any | null> {
-    if (sigRef.v !== 3 && sigRef.v !== 4) return null;
+    if (sigRef.v !== 4) return null;
     if (!discordMessageId) return null;
     const base = veilApiBase();
     const url = `${base}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
@@ -182,46 +182,29 @@ async function computeFlairState(
             const createdAt = typeof raw.createdAt === "number" ? raw.createdAt : null;
             if (!publicKey || !signature) return "unverified";
 
-            // v4: rebuild the canonical body from live message metadata
-            // (mid, cid, uid) plus attachment hashes. The signature
-            // doesn't verify against any other (mid, cid, uid) triple,
-            // so a captured signature can't be reused on a different
-            // message and a forged record posted under the wrong uid
-            // shows up as `invalid`, not `signed`.
-            //
-            // v3 (legacy): rebuild against the legacy v1 canonical
-            // (text + optional [veil:atts:v1] block). Falls back to
-            // text-only canonical for messages signed by older clients
-            // that didn't bind file content.
-            let sigOk = false;
-            if (input.sigRef.v === 4) {
-                if (!input.discordMessageId || !input.channelId || !input.authorId) {
-                    return "unverified";
-                }
-                const ctx = {
-                    discordMessageId: input.discordMessageId,
-                    channelId: input.channelId,
-                    senderUid: input.authorId
-                };
-                const hashes = input.attachmentUrls.length > 0
-                    ? await hashAllAttachments(input.attachmentUrls)
-                    : [];
-                if (!hashes) return "unverified";
-                const canonical = VeilSignedBody.buildCanonicalSignedBodyV4(input.strippedContent, hashes, ctx);
-                sigOk = await cryptoService.verify(canonical, signature, publicKey);
-            } else {
-                if (input.attachmentUrls.length > 0) {
-                    const hashes = await hashAllAttachments(input.attachmentUrls);
-                    if (hashes) {
-                        const canonical = VeilSignedBody.buildCanonicalSignedBody(input.strippedContent, hashes);
-                        sigOk = await cryptoService.verify(canonical, signature, publicKey);
-                    }
-                }
-                if (!sigOk) {
-                    const legacy = VeilSignedBody.buildCanonicalSignedBody(input.strippedContent, []);
-                    sigOk = await cryptoService.verify(legacy, signature, publicKey);
-                }
+            // v4 only: rebuild the canonical body from live message
+            // metadata (mid, cid, uid) plus attachment hashes. The
+            // signature doesn't verify against any other (mid, cid,
+            // uid) triple, so a captured signature can't be reused on
+            // a different message and a forged record posted under
+            // the wrong uid shows up as `invalid`, not `signed`.
+            // v3 inserts are no longer accepted and v3 records are
+            // not rendered.
+            if (input.sigRef.v !== 4) return "unverified";
+            if (!input.discordMessageId || !input.channelId || !input.authorId) {
+                return "unverified";
             }
+            const ctx = {
+                discordMessageId: input.discordMessageId,
+                channelId: input.channelId,
+                senderUid: input.authorId
+            };
+            const hashes = input.attachmentUrls.length > 0
+                ? await hashAllAttachments(input.attachmentUrls)
+                : [];
+            if (!hashes) return "unverified";
+            const canonical = VeilSignedBody.buildCanonicalSignedBodyV4(input.strippedContent, hashes, ctx);
+            const sigOk = await cryptoService.verify(canonical, signature, publicKey);
             if (!sigOk) return "invalid";
 
             if (!input.authorId || createdAt == null) {
@@ -229,7 +212,7 @@ async function computeFlairState(
                 // the live message is missing an author id we can't
                 // confirm the binding — treat as missing rather than
                 // showing a misleading "signed".
-                return input.sigRef.v === 4 ? "unverified" : "signed";
+                return "unverified";
             }
 
             const active = await isBindingActiveAt(input.authorId, publicKey, createdAt);
@@ -240,9 +223,9 @@ async function computeFlairState(
             // so we require publicKey to actually be bound to the
             // author's discord uid at signing time. Records that fail
             // this check are graffiti — render as if no record existed.
-            if (input.sigRef.v === 4 && !active) return "unverified";
+            if (!active) return "unverified";
 
-            return active ? "verified" : "signed";
+            return "verified";
         } catch {
             return "unverified";
         }
