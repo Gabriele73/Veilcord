@@ -685,6 +685,11 @@ async function decryptAndCommit(messageId: string): Promise<void> {
         : me.id;
     const senderUid = authorId ?? null;
     if (!recipientUid || !senderUid) {
+        console.warn("[VeilE2E debug] failed: missing uid", {
+            authorId, meId: me.id, channelId,
+            hasGetRecipientId: typeof channel?.getRecipientId,
+            channelExists: !!channel
+        });
         await commitPlaceholder(channelId, messageId, "failed");
         return;
     }
@@ -695,6 +700,9 @@ async function decryptAndCommit(messageId: string): Promise<void> {
         channelId
     });
     if (plaintext == null) {
+        console.warn("[VeilE2E debug] failed: tryDecryptFromSender returned null", {
+            senderUid, recipientUid, channelId, authorId, meId: me.id
+        });
         await commitPlaceholder(channelId, messageId, "failed");
         return;
     }

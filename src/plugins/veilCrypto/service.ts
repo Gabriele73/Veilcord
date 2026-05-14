@@ -1039,28 +1039,29 @@ export class CryptoService {
     ): Promise<string | null> {
         try {
             await this._ensureInitialized();
-            if (!this._activePrivateKeyHex) return null;
-            if (!(await isX25519Available())) return null;
+            if (!this._activePrivateKeyHex) { console.warn("[VeilE2E debug] no active priv key"); return null; }
+            if (!(await isX25519Available())) { console.warn("[VeilE2E debug] x25519 unavailable"); return null; }
 
             const parsed = parseE2eEnvelope(envelope);
-            if (!parsed) return null;
+            if (!parsed) { console.warn("[VeilE2E debug] envelope parse failed"); return null; }
 
             const ourPub = await this.getPublicKey();
             const ourFpr = await fingerprintPubkey(ourPub);
             const matchingSlot = parsed.slots.find(slot => bytesEqualConstantTime(slot.fpr, ourFpr));
-            if (!matchingSlot) return null;
+            if (!matchingSlot) { console.warn("[VeilE2E debug] no matching slot for our fpr"); return null; }
 
             const myX25519Priv = await ed25519PrivToX25519(this._activePrivateKeyHex);
             const sharedSecret = await deriveSharedBits(myX25519Priv, parsed.ephPub);
             const wrapKey = await deriveSlotWrapKey(sharedSecret, parsed.ephPub, matchingSlot.fpr);
             const wrapAad = buildE2eSlotAad(parsed.ephPub, matchingSlot.fpr);
 
+            console.warn("[VeilE2E debug] attempting slot unwrap...");
             const contentKeyBytes = new Uint8Array(await crypto.subtle.decrypt(
                 { name: "AES-GCM", iv: matchingSlot.wrapIv as BufferSource, additionalData: wrapAad as BufferSource },
                 wrapKey,
                 matchingSlot.wrapped as BufferSource
             ));
-            if (contentKeyBytes.length !== E2E_CONTENT_KEY_BYTES) return null;
+            if (contentKeyBytes.length !== E2E_CONTENT_KEY_BYTES) { console.warn("[VeilE2E debug] bad contentKey len", contentKeyBytes.length); return null; }
 
             const contentKey = await crypto.subtle.importKey(
                 "raw",
@@ -1071,12 +1072,14 @@ export class CryptoService {
             );
 
             const payloadAad = buildE2ePayloadAad(ctx);
+            console.warn("[VeilE2E debug] attempting payload decrypt, ctx:", JSON.stringify(ctx));
             const plainBytes = await crypto.subtle.decrypt(
                 { name: "AES-GCM", iv: parsed.payloadIv as BufferSource, additionalData: payloadAad as BufferSource },
                 conte             parsed.payload as BufferSource
             );
             return new TextDecoder().decode(plainBytes);
-        } catch {
+        } catch (e) {
+            console.warn("[VeilE2E debug] tryDecryptFromSender threw:", e, "ctx:", ctx);
             return null;
         }
     }
