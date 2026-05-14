@@ -85,13 +85,48 @@ function LockGlyph({ width = 20, height = 20, locked = true }: { width?: number;
 
 /* ---------- per-channel sign-mode tracking ----------
  *
- * The signed-message plugin keeps `lastEnabled` as a single global
- * flag rather than per-channel state, because its chatbar button used
- * to live in every channel and read the same shared toggle. We mirror
- * that here: sign mode is global, not per-channel. E2E stays per-
- * channel because the underlying plugin tracks `enabledByChannel`. */
+ * Module-level singleton state. The signed-message plugin keeps
+ * `lastEnabled` as a single global flag (not per-channel). E2E is
+ * per-channel via the underlying plugin's `enabledByChannel` map; we
+ * mirror it here so the picker can reflect the current state when a
+ * different channel mounts the button. Listeners are attached once
+ * at module load (not inside a component effect), so module state
+ * stays correct even when no picker is mounted — every component
+ * instance reads through `modeForChannel` instead of caching the
+ * mode in its own React state.
+ */
 const e2eByChannel = new Map<string, boolean>();
 let signEnabledGlobal = false;
+
+/** Tick bumped every time module state changes; components subscribe via useState. */
+let stateTick = 0;
+const stateSubscribers = new Set<() => void>();
+function notifySubscribers() {
+    stateTick++;
+    for (const fn of stateSubscribers) {
+        try { fn(); } catch { /* ignore */ }
+    }
+}
+
+if (typeof window !== "undefined") {
+    window.addEventListener(SIGN_TOGGLE_EVENT, (e: Event) => {
+        const detail = (e as CustomEvent).detail;
+        if (!detail || typeof detail.enabled !== "boolean") return;
+        if (signEnabledGlobal === detail.enabled) return;
+        signEnabledGlobal = detail.enabled;
+        notifySubscribers();
+    });
+    window.addEventListener(E2E_TOGGLE_EVENT, (e: Event) => {
+        const detail = (e as CustomEvent).detail;
+        if (!detail || typeof detail.channelId !== "string") return;
+        const next = Boolean(detail.enabled);
+        const prev = e2eByChannel.get(detail.channelId) === true;
+        if (prev === next) return;
+        if (next) e2eByChannel.set(detail.channelId, true);
+        else e2eByChannel.delete(detail.channelId);
+        notifySubscribers();
+    });
+}
 
 function modeForChannel(channelId: string): Mode {
     if (signEnabledGlobal) return "signed";
@@ -108,17 +143,56 @@ function applyMode(channelId: string, mode: Mode) {
     const wantSigned = mode === "signed";
     const wantE2e = mode === "e2e";
 
-    if (currentlyE2e !== wantE2e) {
+    // Optimistically update local module state so the picker icon
+    // reflects the user's intent immediately. The underlying plugins
+    // are async (sign awaits a binding check, e2e fires its own
+    // toggle event); without this, the icon stays on the previous
+    // mode until the round-trip completes, which users read as "the
+    // picker didn't update". Real plugin state arrives via the
+    // SIGN_TOGGLE / E2E_TOGGLE listeners and reconciles us if the
+    // request was rejected (e.g. missing binding -> sign plugin
+    // dispatches SIGN_TOGGLE { enabled: false } and we revert).
+    let changed = false;
+    if (signEnabledGlobal !== wantSigned) {
+        signEnabledGlobal = wantSigned;
+        changed = true;
+    }
+    const e2ePrev = e2eByChannel.get(channelId) === true;
+    if (e2ePrev !== wantE2e) {
+        if (wantE2e) e2eByChannel.set(channelId, true);
+        else e2eByChannel.delete(channelId);
+        changed = true;
+    }
+    if (changed) notifySubscribers();
+
+    // Disable the outgoing one before enabling the incoming one so
+    // the underlying plugins never both think they own the channel
+    // for an instant (matters when switching signed <-> e2e).
+    if (currentlyE2e && !wantE2e) {
         try {
             window.dispatchEvent(new CustomEvent(REQUEST_E2E_EVENT, {
-                detail: { channelId, enabled: wantE2e }
+                detail: { channelId, enabled: false }
             }));
         } catch { /* ignore */ }
     }
-    if (currentlySigned !== wantSigned) {
+    if (currentlySigned && !wantSigned) {
         try {
             window.dispatchEvent(new CustomEvent(REQUEST_SIGN_EVENT, {
-                detail: { enabled: wantSigned }
+                detail: { enabled: false }
+            }));
+        } catch { /* ignore */ }
+    }
+    if (!currentlyE2e && wantE2e) {
+        try {
+            window.dispatchEvent(new CustomEvent(REQUEST_E2E_EVENT, {
+                detail: { channelId, enabled: true }
+            }));
+        } catch { /* ignore */ }
+    }
+    if (!currentlySigned && wantSigned) {
+        try {
+            window.dispatchEvent(new CustomEvent(REQUEST_SIGN_EVENT, {
+                detail: { enabled: true }
             }));
         } catch { /* ignore */ }
     }
@@ -128,43 +202,22 @@ function applyMode(channelId: string, mode: Mode) {
 
 const VeilModeButton: ChatBarButtonFactory = ({ channel, isMainChat }) => {
     const channelId = channel?.id;
-    const [mode, setMode] = useState<Mode>(channelId ? modeForChannel(channelId) : "plain");
+    /*
+     * `tick` is just a re-render trigger — actual state lives in the
+     * module singleton above. Reading state during render via
+     * `modeForChannel` guarantees we never show a stale value, and
+     * because both the click action and the request-event reply
+     * update the module map, the menu re-opens with the right
+     * checked state next time.
+     */
+    const [, setTick] = useState(stateTick);
     const [e2eEligible, setE2eEligible] = useState(false);
 
-    /*
-     * Sync local state with global/channel flips that originate from
-     * elsewhere (auto-disable on failed encrypt, MODE_E2E_ON_EVENT
-     * collision, etc). The picker is the only UI surface, but the
-     * underlying plugins still call `setEnabled` from their own send-
-     * paths.
-     */
     useEffect(() => {
-        if (!channelId) return;
-        setMode(modeForChannel(channelId));
-
-        const onSignToggle = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (!detail || typeof detail.enabled !== "boolean") return;
-            signEnabledGlobal = detail.enabled;
-            setMode(modeForChannel(channelId));
-        };
-        const onE2eToggle = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (!detail || typeof detail.channelId !== "string") return;
-            const next = Boolean(detail.enabled);
-            if (next) e2eByChannel.set(detail.channelId, true);
-            else e2eByChannel.delete(detail.channelId);
-            if (detail.channelId === channelId) {
-                setMode(modeForChannel(channelId));
-            }
-        };
-        window.addEventListener(SIGN_TOGGLE_EVENT, onSignToggle as EventListener);
-        window.addEventListener(E2E_TOGGLE_EVENT, onE2eToggle as EventListener);
-        return () => {
-            window.removeEventListener(SIGN_TOGGLE_EVENT, onSignToggle as EventListener);
-            window.removeEventListener(E2E_TOGGLE_EVENT, onE2eToggle as EventListener);
-        };
-    }, [channelId]);
+        const sub = () => setTick(stateTick);
+        stateSubscribers.add(sub);
+        return () => { stateSubscribers.delete(sub); };
+    }, []);
 
     /*
      * Compute E2E eligibility (peer has a linked key + subtle-crypto
@@ -198,6 +251,8 @@ const VeilModeButton: ChatBarButtonFactory = ({ channel, isMainChat }) => {
 
     if (!isMainChat || !channel || !channelId) return null;
 
+    const mode = modeForChannel(channelId);
+
     const tooltip =
         mode === "signed" ? "Veil mode: Sign. Click to change."
         : mode === "e2e" ? "Veil mode: Encrypt. Click to change."
@@ -212,52 +267,55 @@ const VeilModeButton: ChatBarButtonFactory = ({ channel, isMainChat }) => {
         : mode === "e2e" ? LockGlyph
         : PlainIcon;
 
+    const pickAndClose = (next: Mode) => {
+        // Close first: applyMode dispatches a synchronous cascade
+        // through both underlying plugins; if any listener throws
+        // (or a future one does), the menu still has to close.
+        ContextMenuApi.closeContextMenu();
+        applyMode(channelId, next);
+    };
+
     const onClick = (event: React.MouseEvent) => {
-        ContextMenuApi.openContextMenu(event as any, () => (
-            <Menu.Menu
-                navId="veil-mode-picker"
-                onClose={ContextMenuApi.closeContextMenu}
-                aria-label="Veil mode"
-            >
-                <Menu.MenuGroup label="Veil mode">
-                    <Menu.MenuRadioItem
-                        id="veil-mode-plain"
-                        label="Off"
-                        checked={mode === "plain"}
-                        group="veil-mode"
-                        action={() => {
-                            applyMode(channelId, "plain");
-                            setMode("plain");
-                        }}
-                    />
-                    <Menu.MenuRadioItem
-                        id="veil-mode-signed"
-                        label="Sign messages"
-                        checked={mode === "signed"}
-                        group="veil-mode"
-                        action={() => {
-                            applyMode(channelId, "signed");
-                            // Optimistic — `veil-sign:toggle` will
-                            // overwrite if the underlying plugin
-                            // refuses (no binding, etc).
-                            setMode("signed");
-                        }}
-                    />
-                    <Menu.MenuRadioItem
-                        id="veil-mode-e2e"
-                        label={e2eEligible ? "Encrypt end-to-end" : "Encrypt end-to-end (peer has no Veil key)"}
-                        checked={mode === "e2e"}
-                        group="veil-mode"
-                        disabled={!e2eEligible && mode !== "e2e"}
-                        action={() => {
-                            if (!e2eEligible && mode !== "e2e") return;
-                            applyMode(channelId, "e2e");
-                            setMode("e2e");
-                        }}
-                    />
-                </Menu.MenuGroup>
-            </Menu.Menu>
-        ));
+        ContextMenuApi.openContextMenu(event as any, () => {
+            // Read mode fresh per-render so the radio reflects any
+            // module-state change that happened while the menu was open.
+            const liveMode = modeForChannel(channelId);
+            return (
+                <Menu.Menu
+                    navId="veil-mode-picker"
+                    onClose={ContextMenuApi.closeContextMenu}
+                    aria-label="Veil mode"
+                >
+                    <Menu.MenuGroup label="Veil mode">
+                        <Menu.MenuRadioItem
+                            id="veil-mode-plain"
+                            label="Off"
+                            checked={liveMode === "plain"}
+                            group="veil-mode"
+                            action={() => pickAndClose("plain")}
+                        />
+                        <Menu.MenuRadioItem
+                            id="veil-mode-signed"
+                            label="Sign messages"
+                            checked={liveMode === "signed"}
+                            group="veil-mode"
+                            action={() => pickAndClose("signed")}
+                        />
+                        <Menu.MenuRadioItem
+                            id="veil-mode-e2e"
+                            label={e2eEligible ? "Encrypt end-to-end" : "Encrypt end-to-end (peer has no Veil key)"}
+                            checked={liveMode === "e2e"}
+                            group="veil-mode"
+                            disabled={!e2eEligible && liveMode !== "e2e"}
+                            action={() => {
+                                if (!e2eEligible && liveMode !== "e2e") return;
+                                pickAndClose("e2e");
+                            }}
+                        />
+                    </Menu.MenuGroup>
+                </Menu.Menu>
+            );
+        });
     };
 
     return (
