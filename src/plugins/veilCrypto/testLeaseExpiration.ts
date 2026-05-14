@@ -63,8 +63,9 @@ export class VeilLeaseTest {
      * Force the trusted unlock lease to expire by setting expiresAt to the past.
      * This simulates what happens when the 30-day lease naturally expires.
      */
-    st async expireLease() {
-        const state = await cryptoService.keyStor) {
+    static async expireLease() {
+        const state = await cryptoService.keyStorage.getTrustedUnlockState();
+        if (!state) {
             console.error("[VeilLeaseTest] No trusted unlock state found - nothing to expire");
             return false;
         }
@@ -72,7 +73,11 @@ export class VeilLeaseTest {
         // Set expiration to 1 hour ago
         const expiredState = {
             ...state,
-            expiresAt: Date.now() - (xpected behavior: operations will fail until you re-authenticate");
+            expiresAt: Date.now() - (60 * 60 * 1000)
+        };
+
+        await cryptoService.keyStorage.setTrustedUnlockState(expiredState);
+        console.log("[VeilLeaseTest] ✓ Lease expired. Expected behavior: operations will fail until you re-authenticate");
 
         return true;
     }
@@ -126,7 +131,7 @@ export class VeilLeaseTest {
      * Test what happens when the lease expires during normal operations.
      * Sets lease to expire in 5 seconds, then tries to sign a message after 6 seconds.
      */
-    static async testLeasation() {
+    static async testLeaseExpiration() {
         await this.setCustomLeaseDuration(5);
         console.log("[VeilLeaseTest] Lease will expire in 5 seconds...");
 
@@ -135,7 +140,10 @@ export class VeilLeaseTest {
             await cryptoService.sign("test before expiration");
             console.log("[VeilLeaseTest] ✓ Sign operation succeeded (lease still valid)");
         } catch (e: any) {
-            consoTimeout(resolve, 6000));
+            console.log("[VeilLeaseTest] Sign before expiration failed:", e.message);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 6000));
 
         // Try signing after expiration (should fail)
         try {
@@ -172,7 +180,11 @@ export class VeilLeaseTest {
     }
 }
 
-// Expose to window for console access
-if (typeof window !== "undefined") {
-    (window as any).VeilLeaseTest = seTest;
+// Expose to window for console access (development only).
+// Shipping this in production would let any in-page script (themes,
+// other plugins, devtools paste from a social-engineer) flip lease
+// state and call clearAllState. IS_DEV is the same gate Vencord uses
+// for its own debug surfaces.
+if (IS_DEV && typeof window !== "undefined") {
+    (window as any).VeilLeaseTest = VeilLeaseTest;
 }

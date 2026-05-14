@@ -110,6 +110,46 @@ export function encodeManifestPayload(manifest: VeilManifest): string {
     return MANIFEST_SENTINEL + "\n" + JSON.stringify(manifest);
 }
 
+/*
+ * Manifest hardening.
+ *
+ * `name` and `mime` arrive from a peer-controlled JSON blob. The
+ * receiver mints a `blob:` URL with `type: meta.mime` and surfaces
+ * `meta.name` as the download filename. Without sanitisation:
+ *  - `mime: "text/html"` (or `image/svg+xml`) lets the renderer treat
+ *    the blob as an HTML document if it ever gets navigated to,
+ *    which is XSS-in-renderer in an Electron host.
+ *  - `name` ending up unfiltered in `<a download>` lets a peer push
+ *    path-traversal filenames or control chars at the save dialog.
+ * Also cap manifest body size and attachment count to keep a hostile
+ * peer from wedging the parser with megabytes of JSON.
+ */
+const SAFE_MIME = /^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/;
+const FORBIDDEN_MIME_PREFIXES = ["text/html", "application/xhtml", "image/svg"];
+const MAX_NAME_LEN = 255;
+const MAX_MIME_LEN = 127;
+const MAX_MANIFEST_BYTES = 64 * 1024;
+const MAX_ATTACHMENTS = 50;
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_DIMENSION = 32_768;
+
+function sanitizeAttachmentName(n: string): string | null {
+    if (n.length === 0 || n.length > MAX_NAME_LEN) return null;
+    // Reject control chars (incl. NUL), path separators on either OS,
+    // and any `..` segment that could escape a save directory.
+    if (/[\x00-\x1f\x7f/\\]/.test(n)) return null;
+    if (n === "." || n === ".." || n.split(/[.]/).some(p => p === "..")) return null;
+    return n;
+}
+
+function sanitizeAttachmentMime(m: string): string | null {
+    if (m.length === 0 || m.length > MAX_MIME_LEN) return null;
+    if (!SAFE_MIME.test(m)) return null;
+    const lower = m.toLowerCase().split(";")[0].trim();
+    if (FORBIDDEN_MIME_PREFIXES.some(p => lower === p || lower.startsWith(p + "+"))) return null;
+    return lower;
+}
+
 /**
  * Parse the envelope plaintext. Returns the structured manifest if the
  * sender sent one, otherwise treats the whole string as legacy raw text
@@ -121,6 +161,9 @@ export function decodeManifestPayload(plaintext: string): VeilManifest {
         return { v: 1, text: plaintext, attachments: [] };
     }
     const body = plaintext.slice(sentinel.length);
+    if (body.length > MAX_MANIFEST_BYTES) {
+        return { v: 1, text: "", attachments: [] };
+    }
     try {
         const parsed = JSON.parse(body);
         if (
@@ -131,24 +174,31 @@ export function decodeManifestPayload(plaintext: string): VeilManifest {
             Array.isArray(parsed.attachments)
         ) {
             const attachments: ManifestAttachment[] = [];
-            for (const att of parsed.attachments) {
+            const items = parsed.attachments.slice(0, MAX_ATTACHMENTS);
+            for (const att of items) {
                 if (
                     !att ||
                     typeof att.name !== "string" ||
                     typeof att.mime !== "string" ||
                     typeof att.size !== "number" ||
+                    !Number.isFinite(att.size) ||
+                    att.size < 0 ||
+                    att.size > MAX_FILE_BYTES ||
                     typeof att.key !== "string" ||
                     typeof att.iv !== "string"
                 ) continue;
+                const name = sanitizeAttachmentName(att.name);
+                const mime = sanitizeAttachmentMime(att.mime);
+                if (!name || !mime) continue;
                 attachments.push({
-                    name: att.name,
-                    mime: att.mime,
+                    name,
+                    mime,
                     size: att.size,
                     key: att.key,
                     iv: att.iv,
                     spoiler: typeof att.spoiler === "boolean" ? att.spoiler : undefined,
-                    width: typeof att.width === "number" ? att.width : undefined,
-                    height: typeof att.height === "number" ? att.height : undefined
+                    width: typeof att.width === "number" && Number.isFinite(att.width) && att.width >= 0 && att.width < MAX_DIMENSION ? att.width : undefined,
+                    height: typeof att.height === "number" && Number.isFinite(att.height) && att.height >= 0 && att.height < MAX_DIMENSION ? att.height : undefined
                 });
             }
             return { v: 1, text: parsed.text, attachments };
