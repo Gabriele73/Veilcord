@@ -1075,7 +1075,8 @@ export class CryptoService {
             console.warn("[VeilE2E debug] attempting payload decrypt, ctx:", JSON.stringify(ctx));
             const plainBytes = await crypto.subtle.decrypt(
                 { name: "AES-GCM", iv: parsed.payloadIv as BufferSource, additionalData: payloadAad as BufferSource },
-                conte             parsed.payload as BufferSource
+                contentKey,
+                parsed.payload as BufferSource
             );
             return new TextDecoder().decode(plainBytes);
         } catch (e) {
