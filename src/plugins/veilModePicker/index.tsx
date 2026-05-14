@@ -41,12 +41,31 @@ const REQUEST_E2E_EVENT = "veil-mode:request-e2e";
 
 const BUTTON_ID = "veil-mode";
 
-/* ---------- icons ---------- */
+/* ---------- icons ----------
+ *
+ * Unified shield motif so the three modes read as one family:
+ *   - plain  : empty shield outline (no protection layer)
+ *   - signed : shield with a flowing signature stroke across it
+ *   - e2e    : shield with a keyhole (encrypted to a single peer)
+ *
+ * All strokes use `currentColor`; the wrapping span sets the
+ * per-mode color (see CLAUDE.md UI contrast rule). Shield path is
+ * shared so the silhouette stays stable when switching modes.
+ */
+
+const SHIELD_PATH = "M12 3 4.5 6v6c0 4.5 3.2 8.3 7.5 9 4.3-.7 7.5-4.5 7.5-9V6L12 3z";
 
 function PlainIcon({ width = 20, height = 20 }: { width?: number; height?: number; }) {
     return (
         <svg width={width} height={height} viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="3" fill="currentColor" />
+            <path
+                d={SHIELD_PATH}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+            />
         </svg>
     );
 }
@@ -55,12 +74,28 @@ function SignGlyph({ width = 20, height = 20 }: { width?: number; height?: numbe
     return (
         <svg width={width} height={height} viewBox="0 0 24 24" aria-hidden="true">
             <path
-                d="M4 19h16M6 16l9-9 3 3-9 9H6v-3z"
+                d={SHIELD_PATH}
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="1.8"
+                strokeWidth="1.7"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+            />
+            <path
+                d="M7.8 13.2c1.4-1.9 2.6-1.9 3.6 0s2.2 1.9 4.8-1"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
                 strokeLinecap="round"
                 strokeLinejoin="round"
+            />
+            <path
+                d="M8 16h8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                opacity="0.7"
             />
         </svg>
     );
@@ -69,16 +104,32 @@ function SignGlyph({ width = 20, height = 20 }: { width?: number; height?: numbe
 function LockGlyph({ width = 20, height = 20, locked = true }: { width?: number; height?: number; locked?: boolean; }) {
     return (
         <svg width={width} height={height} viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" />
             <path
-                d={locked
-                    ? "M8 11V8a4 4 0 0 1 8 0v3"
-                    : "M8 11V8a4 4 0 0 1 7.5-2"}
+                d={SHIELD_PATH}
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="1.8"
+                strokeWidth="1.7"
+                strokeLinejoin="round"
                 strokeLinecap="round"
             />
+            {locked ? (
+                <>
+                    <circle cx="12" cy="11.2" r="1.6" fill="currentColor" />
+                    <path
+                        d="M12 12.4v3"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                    />
+                </>
+            ) : (
+                <path
+                    d="M9.5 11.5h5M9.5 14h3"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                />
+            )}
         </svg>
     );
 }
