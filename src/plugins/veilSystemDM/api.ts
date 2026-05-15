@@ -73,7 +73,7 @@ export function buildSystemUser(): any {
     };
 }
 
-function buildChannel(): any {
+function buildChannel(lastMessageId: string | null): any {
     /*
      * Discord's CHANNEL_CREATE store handler ingests `recipients` entries
      * into UserStore. Passing just the recipient id leaves UserStore
@@ -81,13 +81,20 @@ function buildChannel(): any {
      * crashes on render with "renderAvatar: no user or channel".
      * Pass the full user object so the recipient is registered as a
      * side effect of channel injection.
+     *
+     * `last_message_id` is the DM list's sort key. Without it the
+     * channel sorts as if its most recent activity was epoch zero
+     * (or worse, gets pinned to the top because Discord falls back
+     * to the channel id), so the synthetic channel always floats
+     * above real conversations regardless of when the last system
+     * notice was actually posted.
      */
     return {
         id: VEIL_SYSTEM_CHANNEL_ID,
         type: 1,
         recipients: [buildSystemUser()],
         recipient_ids: [VEIL_SYSTEM_USER_ID],
-        last_message_id: null,
+        last_message_id: lastMessageId,
         flags: 0,
         is_spam: false
     };
@@ -206,15 +213,17 @@ function injectUser(): void {
  * Push the channel into ChannelStore / PrivateChannelStore. Idempotent:
  * subsequent CHANNEL_CREATE dispatches are no-ops on the store.
  */
-export function injectChannel(): void {
+export async function injectChannel(): Promise<void> {
     injectUser();
     if (ChannelStore.getChannel?.(VEIL_SYSTEM_CHANNEL_ID)) {
         lastInjectedChannel = true;
         return;
     }
+    const stored = await loadMessages();
+    const lastMessageId = stored.length > 0 ? stored[stored.length - 1].id : null;
     FluxDispatcher.dispatch({
         type: "CHANNEL_CREATE",
-        channel: createChannelRecordFromServer(buildChannel())
+        channel: createChannelRecordFromServer(buildChannel(lastMessageId))
     });
     lastInjectedChannel = true;
 }
@@ -249,7 +258,7 @@ export async function seedMessages(): Promise<void> {
 
 export async function reinject(): Promise<void> {
     await migrateLegacyMessageIds();
-    injectChannel();
+    await injectChannel();
     await seedMessages();
 }
 
@@ -274,7 +283,7 @@ export async function postVeilSystemMessage(
 
     if (!opts.content || typeof opts.content !== "string") return;
 
-    if (!lastInjectedChannel) injectChannel();
+    if (!lastInjectedChannel) await injectChannel();
 
     const stored: StoredMessage = {
         id: nextMessageId(),
