@@ -273,3 +273,8 @@ export async function getActiveBindingForUid(discordUid: string): Promise<Bindin
         .sort((a, b) => b.linkedAt - a.linkedAt);
     return active[0] ?? null;
 }
+
+export async function fetchDiscordUidByPubkey(pubkey: string): Promise<{ discordUid: string; publicKey: string; linkedAt: number }> {
+    const url = `${veilApiBase()}/veilcord/pubkey-binding/by-pubkey/${encodeURIComponent(pubkey.toLowerCase())}`;
+    return jsonRequest<{ discordUid: string; publicKey: string; linkedAt: number }>("GET", url);
+}

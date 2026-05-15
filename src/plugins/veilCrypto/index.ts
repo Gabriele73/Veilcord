@@ -25,6 +25,7 @@ export {
     linkPubkeyToDiscord,
     unlinkPubkeyFromDiscord,
     fetchBindingsByDiscordUid,
+    fetchDiscordUidByPubkey,
     isBindingActiveAt,
     getActiveBindingForUid
 } from "./pubkeyBinding";
