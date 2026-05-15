@@ -11,7 +11,10 @@ import { fetchDiscordUidByPubkey } from "@plugins/veilCrypto";
 import { Devs } from "@utils/constants";
 import { openUserProfile } from "@utils/discord";
 import definePlugin from "@utils/types";
-import { showToast, Toasts, useState } from "@webpack/common";
+import { createRoot, showToast, Toasts, useState } from "@webpack/common";
+
+const MOUNT_CLASS = "vc-veil-pkl-mount";
+const ROW_CLASS_PREFIX = "addFriendUsernameRow";
 
 function VeilPubkeyLookup() {
     const [pubkey, setPubkey] = useState("");
@@ -61,10 +64,55 @@ function VeilPubkeyLookup() {
     );
 }
 
-const veilPubkeyLookupComponent = ErrorBoundary.wrap(
+const WrappedLookup = ErrorBoundary.wrap(
     () => <VeilPubkeyLookup />,
     { noop: true }
 );
+
+let observer: MutationObserver | null = null;
+const activeRoots: Array<{ root: any; host: HTMLElement; }> = [];
+const mounted = new WeakSet<Element>();
+
+function findRowElement(root: ParentNode): Element | null {
+    return root.querySelector(`[class*="${ROW_CLASS_PREFIX}"]`);
+}
+
+function ensureMounted(row: Element) {
+    if (mounted.has(row)) return;
+    const parent = row.parentElement;
+    if (!parent) return;
+    if (parent.querySelector(`:scope > .${MOUNT_CLASS}`)) {
+        mounted.add(row);
+        return;
+    }
+
+    const host = document.createElement("div");
+    host.className = MOUNT_CLASS;
+    parent.insertBefore(host, row.nextSibling);
+
+    const root = createRoot(host);
+    root.render(<WrappedLookup />);
+    activeRoots.push({ root, host });
+    mounted.add(row);
+}
+
+function unmountAll() {
+    while (activeRoots.length) {
+        const { root, host } = activeRoots.pop()!;
+        try { root.unmount(); } catch { /* ignore */ }
+        try { host.remove(); } catch { /* ignore */ }
+    }
+}
+
+function scan() {
+    const row = findRowElement(document);
+    if (row) {
+        ensureMounted(row);
+    } else if (activeRoots.length) {
+        // Add Friends page is no longer in DOM, clean up.
+        unmountAll();
+    }
+}
 
 export default definePlugin({
     name: "VeilPubkeyLookup",
@@ -73,15 +121,15 @@ export default definePlugin({
     dependencies: ["VeilCrypto"],
     required: true,
 
-    patches: [
-        {
-            find: "addFriendUsernameRow",
-            replacement: {
-                match: /(\.addFriendUsernameRow.{0,600}\]\}\))\]/,
-                replace: "$1,$self.veilPubkeyLookupComponent()]"
-            }
-        }
-    ],
+    start() {
+        scan();
+        observer = new MutationObserver(() => scan());
+        observer.observe(document.body, { childList: true, subtree: true });
+    },
 
-    veilPubkeyLookupComponent
+    stop() {
+        observer?.disconnect();
+        observer = null;
+        unmountAll();
+    }
 });
