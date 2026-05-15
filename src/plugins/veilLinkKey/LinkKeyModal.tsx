@@ -439,7 +439,7 @@ function ImportPanel({ existing, refresh }: { existing: boolean; refresh: () => 
 
     function ensureBackupShape(p: any): boolean {
         if (!p || typeof p !== "object") return false;
-        if (p.format !== "veil-key-backup" || p.version !== 1) return false;
+        if (p.format !== "veil-key-backup" || ![1, 2].includes(p.version)) return false;
         if (!p?.kdf?.salt || !p?.kdf?.iterations) return false;
         if (!p?.cipher?.iv || !p?.data) return false;
         return true;
