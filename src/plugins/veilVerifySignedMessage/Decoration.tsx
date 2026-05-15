@@ -7,9 +7,9 @@
 import { CanonicalAttachment, cryptoService, isBindingActiveAt, veilApiBase, VeilSignedBody } from "@plugins/veilCrypto";
 import { openModal } from "@utils/modal";
 import { PluginNative } from "@utils/types";
-import { MessageStore, ReactDOM, useEffect, useLayoutEffect, useRef, useState, useStateFromStores } from "@webpack/common";
+import { FluxDispatcher, MessageStore, ReactDOM, useEffect, useLayoutEffect, useRef, useState, useStateFromStores } from "@webpack/common";
 
-import { extractVeilSigRef, stripZwc, VeilSigRef } from "./parser";
+import { stripZwc } from "./parser";
 import * as recordCache from "./recordCache";
 import { VerifyModal } from "./VerifyModal";
 
@@ -18,8 +18,7 @@ const Native = VencordNative.pluginHelpers.VeilVerifySignedMessage as PluginNati
 type FlairState = "loading" | "verified" | "signed" | "invalid" | "unverified";
 
 /**
- * Module-level cache keyed by `<lookup>:<authorId>` where `<lookup>` is either
- * `v3:<discord message id>`.
+ * Derived verification state cache keyed by `lookupKey(input)`.
  *
  * `verified` and `invalid` are stable: a signed-message record never mutates,
  * and a binding's history is append-only, so once we've confirmed the
@@ -31,8 +30,7 @@ type FlairState = "loading" | "verified" | "signed" | "invalid" | "unverified";
  *
  * `unverified` is a soft state: maybe the sender's POST landed late, maybe
  * the marker is fake. Revalidate after `UNVERIFIED_REVALIDATE_AFTER_MS` so
- * we don't hammer the backend, but the sender's own-message event listener
- * (below) can also bust the entry on demand.
+ * we don't hammer the backend.
  */
 const flairCache = new Map<string, { state: FlairState; ts: number; }>();
 const inflight = new Map<string, Promise<FlairState>>();
@@ -40,33 +38,183 @@ const inflight = new Map<string, Promise<FlairState>>();
 const SIGNED_REVALIDATE_AFTER_MS = 5 * 60 * 1000;
 const UNVERIFIED_REVALIDATE_AFTER_MS = 60 * 1000;
 
-/** Backoff schedule (ms from start) for fetching a record that may be in-flight. */
+/** Backoff schedule (ms from start) for the live single-id retry path. */
 const FETCH_RETRY_DELAYS_MS = [0, 1500, 4000, 9000, 18000];
+
+/** How long a channel pre-fetch is considered fresh before we re-fetch. */
+const CHANNEL_CACHE_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Custom event dispatched by the signer plugin when its backend POST succeeds,
  * so any mounted decoration for that Discord message id can immediately
- * re-fetch and flip from `loading`/`unverified` to its real state.
+ * re-fetch and flip to its real state.
  */
 const REGISTERED_EVENT = "veil:signed-message:registered";
 
-function bustCacheForDiscordMessageId(discordMessageId: string) {
-    const prefix = `v4:${discordMessageId}:`;
+/**
+ * Channel-scoped record cache. When a chat is opened we batch-fetch
+ * every signed record for that channel in one HTTP call; that result
+ * (and any subsequent single-id fetches triggered by MESSAGE_CREATE
+ * or REGISTERED_EVENT) lives here, indexed by Discord message id.
+ *
+ * Each badge subscribes to `channelCacheListeners` so it re-renders
+ * the moment its message's record lands in the cache, whether from
+ * the bulk fetch or from a live single-id top-up.
+ */
+interface ChannelCacheState {
+    records: Map<string, any>;
+    loadingPromise: Promise<void> | null;
+    loadedAt: number;
+}
+const channelCaches = new Map<string, ChannelCacheState>();
+const channelCacheListeners = new Set<() => void>();
+
+function notifyChannelCacheListeners() {
+    for (const l of channelCacheListeners) {
+        try { l(); } catch { /* ignore */ }
+    }
+}
+
+function getChannelCache(channelId: string): ChannelCacheState {
+    let c = channelCaches.get(channelId);
+    if (!c) {
+        c = { records: new Map(), loadingPromise: null, loadedAt: 0 };
+        channelCaches.set(channelId, c);
+    }
+    return c;
+}
+
+/**
+ * Pull every signed-message record for a channel in one HTTP call and
+ * populate the channel cache. Idempotent within CHANNEL_CACHE_TTL_MS so
+ * re-opening the same channel doesn't re-fetch. Also writes through to
+ * the persistent IDB record cache so subsequent sessions start hot.
+ */
+async function ensureChannelLoaded(channelId: string): Promise<void> {
+    if (!channelId) return;
+    const cache = getChannelCache(channelId);
+    if (cache.loadedAt > 0 && Date.now() - cache.loadedAt < CHANNEL_CACHE_TTL_MS) return;
+    if (cache.loadingPromise) return cache.loadingPromise;
+
+    cache.loadingPromise = (async () => {
+        try {
+            const url = `${veilApiBase()}/veilcord/signed-message/by-channel/${encodeURIComponent(channelId)}`;
+            const res = await fetch(url, { headers: { Accept: "application/json" } });
+            if (!res.ok) return;
+            const json = await res.json().catch(() => null);
+            const records: any[] = Array.isArray(json?.records) ? json.records : [];
+            for (const rec of records) {
+                const mid = typeof rec?.discordMessageId === "string" ? rec.discordMessageId : null;
+                if (!mid) continue;
+                cache.records.set(mid, rec);
+                void recordCache.writeHit(mid, rec);
+            }
+            cache.loadedAt = Date.now();
+        } catch {
+            /* leave loadedAt=0 so a later mount retries */
+        } finally {
+            cache.loadingPromise = null;
+            notifyChannelCacheListeners();
+        }
+    })();
+    return cache.loadingPromise;
+}
+
+/**
+ * Fetch a single signed-message record by Discord id with retry, used
+ * for messages that arrived after the channel pre-fetch (live
+ * MESSAGE_CREATE) and to refresh after the sender's REGISTERED_EVENT.
+ * Hits both the channel cache and the persistent IDB cache so the next
+ * render is O(1) and survives reloads.
+ */
+async function liveFetchOne(channelId: string, messageId: string, options?: { force?: boolean; }): Promise<void> {
+    if (!channelId || !messageId) return;
+    const cache = getChannelCache(channelId);
+
+    if (!options?.force) {
+        if (cache.records.has(messageId)) return;
+        const persisted = await recordCache.readRecord(messageId);
+        if (persisted?.kind === "hit") {
+            cache.records.set(messageId, persisted.record);
+            notifyChannelCacheListeners();
+            return;
+        }
+        if (persisted?.kind === "miss") {
+            // Recent 404 — don't hammer the backend until the TTL lapses.
+            return;
+        }
+    }
+
+    for (let attempt = 0; attempt < FETCH_RETRY_DELAYS_MS.length; attempt++) {
+        const delay = FETCH_RETRY_DELAYS_MS[attempt];
+        if (delay > 0) await new Promise(r => setTimeout(r, delay));
+        try {
+            const url = `${veilApiBase()}/veilcord/signed-message/by-discord/${encodeURIComponent(messageId)}`;
+            const res = await fetch(url, { headers: { Accept: "application/json" } });
+            if (res.status === 404) {
+                void recordCache.writeMiss(messageId);
+                return;
+            }
+            if (!res.ok) continue;
+            const raw = await res.json().catch(() => null);
+            if (!raw || typeof raw !== "object") continue;
+            void recordCache.writeHit(messageId, raw);
+            cache.records.set(messageId, raw);
+            notifyChannelCacheListeners();
+            return;
+        } catch { /* retry */ }
+    }
+}
+
+/**
+ * Subscribed once, lazily on first decoration mount. Live messages that
+ * arrive into channels the user already opened trigger a single-id
+ * fetch so the badge appears in the same render cycle as the message
+ * body. Channels the user hasn't opened are skipped — we never poll
+ * for data the user isn't looking at.
+ */
+let messageCreateInstalled = false;
+function installMessageCreateHook() {
+    if (messageCreateInstalled) return;
+    messageCreateInstalled = true;
+    FluxDispatcher.subscribe("MESSAGE_CREATE", (event: any) => {
+        const msg = event?.message;
+        if (!msg || typeof msg.id !== "string") return;
+        const channelId = event?.channelId ?? msg.channel_id;
+        if (typeof channelId !== "string") return;
+        if (!channelCaches.has(channelId)) return;
+        void liveFetchOne(channelId, msg.id);
+    });
+}
+
+/**
+ * Forcibly drop a record from every layer of caching and re-fetch it.
+ * Used by the sender's REGISTERED_EVENT path so a prior `miss` can't
+ * pin a freshly-signed message as unbadged.
+ */
+function bustCacheFor(channelId: string | null, messageId: string) {
+    const prefix = `v4:${messageId}:`;
     for (const key of Array.from(flairCache.keys())) {
         if (key.startsWith(prefix)) flairCache.delete(key);
     }
-    void recordCache.invalidate(discordMessageId);
+    if (channelId) {
+        const cache = channelCaches.get(channelId);
+        cache?.records.delete(messageId);
+    }
+    void recordCache.invalidate(messageId);
 }
 
 interface LookupInput {
-    sigRef: VeilSigRef;
-    /** Discord message id — required for the by-discord backend lookup. */
-    discordMessageId: string | null;
+    /** Cached record from the channel cache. Required — without a record
+     * there's nothing to verify. */
+    record: any;
+    /** Discord message id — bound into the v4 canonical body. */
+    discordMessageId: string;
     /** Discord channel id — bound into the v4 canonical body. */
-    channelId: string | null;
+    channelId: string;
     /** Live Discord message content with ZWC stripped — verified against the canonical body. */
     strippedContent: string;
-    authorId: string | null;
+    authorId: string;
     /** Live attachment URLs in the message, in order. Used to bind file
      * hashes into the canonical signed body so an image swap breaks
      * the signature. Empty array means text-only verify. */
@@ -119,63 +267,19 @@ function fnv1a32(str: string): string {
     return hash.toString(16).padStart(8, "0");
 }
 
-function lookupKey({ sigRef, discordMessageId, channelId, authorId, strippedContent, attachmentUrls }: LookupInput): string | null {
-    if (sigRef.v !== 4) return null;
-    if (!discordMessageId) return null;
+function lookupKey({ discordMessageId, channelId, authorId, strippedContent, attachmentUrls }: LookupInput): string {
     const attFp = fnv1a32(attachmentUrls.join("|"));
-    return `v${sigRef.v}:${discordMessageId}:${channelId ?? ""}:${authorId ?? ""}:${fnv1a32(strippedContent)}:${attFp}`;
+    return `v4:${discordMessageId}:${channelId}:${authorId}:${fnv1a32(strippedContent)}:${attFp}`;
 }
 
-async function fetchRecordOnce(sigRef: VeilSigRef, discordMessageId: string | null): Promise<any | null> {
-    if (sigRef.v !== 4) return null;
-    if (!discordMessageId) return null;
-
-    // Try the persistent IndexedDB cache first. Records are immutable
-    // once written, so a `hit` is good forever; a `miss` is honored
-    // only within its TTL so late-arriving records eventually surface.
-    const persisted = await recordCache.readRecord(discordMessageId);
-    if (persisted) {
-        if (persisted.kind === "hit") return persisted.record;
-        if (persisted.kind === "miss") return null;
-    }
-
-    const base = veilApiBase();
-    const url = `${base}/veilcord/signed-message/by-discord/${encodeURIComponent(discordMessageId)}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (res.status === 404) {
-        void recordCache.writeMiss(discordMessageId);
-        return null;
-    }
-    if (!res.ok) return null;
-    const raw = await res.json().catch(() => null);
-    if (!raw || typeof raw !== "object") return null;
-    void recordCache.writeHit(discordMessageId, raw);
-    return raw;
-}
-
-async function fetchRecordWithRetry(
-    sigRef: VeilSigRef,
-    discordMessageId: string | null,
-    onRetry: () => void
-): Promise<any | null> {
-    for (let attempt = 0; attempt < FETCH_RETRY_DELAYS_MS.length; attempt++) {
-        const delay = FETCH_RETRY_DELAYS_MS[attempt];
-        if (delay > 0) {
-            await new Promise(r => setTimeout(r, delay));
-            onRetry();
-        }
-        const raw = await fetchRecordOnce(sigRef, discordMessageId);
-        if (raw) return raw;
-    }
-    return null;
-}
-
-async function computeFlairState(
-    input: LookupInput,
-    onLoadingTick: () => void
-): Promise<FlairState> {
+/**
+ * Derive the badge's display state from a cached record. The record
+ * itself comes from the channel cache (no fetch here). The result is
+ * memoized in `flairCache` keyed by the live message fields so an
+ * edit, attachment swap, or author change refreshes the verdict.
+ */
+async function computeFlairState(input: LookupInput): Promise<FlairState> {
     const key = lookupKey(input);
-    if (!key) return "unverified";
 
     const cached = flairCache.get(key);
     if (cached) {
@@ -191,26 +295,18 @@ async function computeFlairState(
 
     const promise = (async (): Promise<FlairState> => {
         try {
-            const raw = await fetchRecordWithRetry(input.sigRef, input.discordMessageId, onLoadingTick);
-            if (!raw) return "unverified";
-
-            const publicKey = typeof raw.publicKey === "string" ? raw.publicKey : null;
-            const signature = typeof raw.signature === "string" ? raw.signature : null;
-            const createdAt = typeof raw.createdAt === "number" ? raw.createdAt : null;
+            const raw = input.record;
+            const publicKey = typeof raw?.publicKey === "string" ? raw.publicKey : null;
+            const signature = typeof raw?.signature === "string" ? raw.signature : null;
+            const createdAt = typeof raw?.createdAt === "number" ? raw.createdAt : null;
             if (!publicKey || !signature) return "unverified";
 
-            // v4 only: rebuild the canonical body from live message
-            // metadata (mid, cid, uid) plus attachment hashes. The
-            // signature doesn't verify against any other (mid, cid,
-            // uid) triple, so a captured signature can't be reused on
-            // a different message and a forged record posted under
-            // the wrong uid shows up as `invalid`, not `signed`.
-            // v3 inserts are no longer accepted and v3 records are
-            // not rendered.
-            if (input.sigRef.v !== 4) return "unverified";
-            if (!input.discordMessageId || !input.channelId || !input.authorId) {
-                return "unverified";
-            }
+            // Rebuild the canonical body from live message metadata
+            // (mid, cid, uid) plus attachment hashes. The signature
+            // doesn't verify against any other (mid, cid, uid) triple,
+            // so a captured signature can't be reused on a different
+            // message and a forged record posted under the wrong uid
+            // shows up as `invalid`.
             const ctx = {
                 discordMessageId: input.discordMessageId,
                 channelId: input.channelId,
@@ -224,13 +320,7 @@ async function computeFlairState(
             const sigOk = await cryptoService.verify(canonical, signature, publicKey);
             if (!sigOk) return "invalid";
 
-            if (!input.authorId || createdAt == null) {
-                // v4 binds the canonical body to the author uid, but if
-                // the live message is missing an author id we can't
-                // confirm the binding — treat as missing rather than
-                // showing a misleading "signed".
-                return "unverified";
-            }
+            if (createdAt == null) return "unverified";
 
             const active = await isBindingActiveAt(input.authorId, publicKey, createdAt);
 
@@ -238,8 +328,7 @@ async function computeFlairState(
             // Anyone can mint a signature claiming any sender uid by
             // signing the matching canonical body with their own key,
             // so we require publicKey to actually be bound to the
-            // author's discord uid at signing time. Records that fail
-            // this check are graffiti — render as if no record existed.
+            // author's discord uid at signing time.
             if (!active) return "unverified";
 
             return "verified";
@@ -319,17 +408,18 @@ function StateGlyph({ state }: { state: FlairState; }) {
 }
 
 export function VeilSigBadge({ message }: { message: any; }) {
-    const ref = extractVeilSigRef(message?.content);
+    const messageId: string | null = typeof message?.id === "string" ? message.id : null;
+    const channelId: string | null = typeof message?.channel_id === "string" ? message.channel_id : null;
     const refMessageId: string | null = typeof message?.messageReference?.message_id === "string"
         ? message.messageReference.message_id
         : null;
     const refChannelId: string | null = typeof message?.messageReference?.channel_id === "string"
         ? message.messageReference.channel_id
-        : (typeof message?.channel_id === "string" ? message.channel_id : null);
+        : channelId;
 
     return (
         <>
-            {ref && <MainMessageBadge message={message} ref_={ref} />}
+            {messageId && channelId && <MainMessageBadge message={message} />}
             {refMessageId && refChannelId && (
                 <ReplyContextBadge refChannelId={refChannelId} refMessageId={refMessageId} />
             )}
@@ -337,15 +427,28 @@ export function VeilSigBadge({ message }: { message: any; }) {
     );
 }
 
-function MainMessageBadge({ message, ref_ }: { message: any; ref_: VeilSigRef; }) {
-    const ref = ref_;
+/**
+ * Subscribe a React component to channel-cache version bumps so it
+ * re-renders whenever a record lands in (or out of) the cache. Returns
+ * a per-render version counter so React picks up the change.
+ */
+function useChannelCacheVersion(): number {
+    const [version, setVersion] = useState(0);
+    useEffect(() => {
+        const listener = () => setVersion(v => v + 1);
+        channelCacheListeners.add(listener);
+        return () => { channelCacheListeners.delete(listener); };
+    }, []);
+    return version;
+}
 
+function MainMessageBadge({ message }: { message: any; }) {
     const authorTag = message?.author
         ? message.author.global_name || message.author.username || message.author.id
         : undefined;
     const authorId: string | null = message?.author?.id ?? null;
-    const discordMessageId: string | null = typeof message?.id === "string" ? message.id : null;
-    const channelId: string | null = typeof message?.channel_id === "string" ? message.channel_id : null;
+    const discordMessageId: string = String(message?.id ?? "");
+    const channelId: string = String(message?.channel_id ?? "");
     const strippedContent = stripZwc(typeof message?.content === "string" ? message.content : "");
     const attachmentUrls: string[] = Array.isArray(message?.attachments)
         ? message.attachments.map((a: any) => (typeof a?.url === "string" ? a.url : "")).filter(Boolean)
@@ -364,59 +467,70 @@ function MainMessageBadge({ message, ref_ }: { message: any; ref_: VeilSigRef; }
         }
     })();
 
-    const input: LookupInput = { sigRef: ref, discordMessageId, channelId, strippedContent, authorId, attachmentUrls };
-    const cacheKey = lookupKey(input);
+    // Re-render whenever the channel cache version bumps so the moment
+    // our record lands (from the bulk pre-fetch, a live MESSAGE_CREATE
+    // fetch, or REGISTERED_EVENT) the badge appears.
+    useChannelCacheVersion();
+
+    // Kick off the per-channel pre-fetch on first mount and install the
+    // MESSAGE_CREATE live hook once. Both are idempotent and cheap to
+    // call from every badge.
+    useEffect(() => {
+        if (!channelId) return;
+        installMessageCreateHook();
+        void ensureChannelLoaded(channelId);
+    }, [channelId]);
+
+    // Sender's own tab: when the local POST succeeds, REGISTERED_EVENT
+    // fires. Drop any cached `miss` and re-fetch so the badge flips
+    // instantly.
+    useEffect(() => {
+        if (!channelId || !discordMessageId) return;
+        const onRegistered = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (!detail || detail.discordMessageId !== discordMessageId) return;
+            bustCacheFor(channelId, discordMessageId);
+            void liveFetchOne(channelId, discordMessageId, { force: true });
+        };
+        window.addEventListener(REGISTERED_EVENT, onRegistered as EventListener);
+        return () => window.removeEventListener(REGISTERED_EVENT, onRegistered as EventListener);
+    }, [discordMessageId, channelId]);
+
+    const record = channelId && discordMessageId
+        ? channelCaches.get(channelId)?.records.get(discordMessageId) ?? null
+        : null;
+
+    const haveAllInputs = !!(record && authorId && channelId && discordMessageId);
+
+    const input: LookupInput | null = haveAllInputs
+        ? { record, discordMessageId, channelId, authorId: authorId!, strippedContent, attachmentUrls }
+        : null;
+    const cacheKey = input ? lookupKey(input) : null;
 
     const [state, setState] = useState<FlairState>(() => {
-        if (!cacheKey) return "unverified";
+        if (!cacheKey) return "loading";
         return flairCache.get(cacheKey)?.state ?? "loading";
     });
 
     useEffect(() => {
+        if (!input) return;
         let cancelled = false;
-        let nonce = 0;
-
-        const run = () => {
-            const myNonce = ++nonce;
-            void computeFlairState(input, () => { /* tick noop, kept for future spinner pulse */ }).then(result => {
-                if (cancelled || myNonce !== nonce) return;
-                setState(result);
-            });
-        };
-
-        run();
-
-        const onRegistered = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (!detail || typeof detail.discordMessageId !== "string") return;
-            if (detail.discordMessageId !== discordMessageId) return;
-            bustCacheForDiscordMessageId(discordMessageId!);
-            setState("loading");
-            run();
-        };
-        window.addEventListener(REGISTERED_EVENT, onRegistered as EventListener);
-
-        return () => {
-            cancelled = true;
-            window.removeEventListener(REGISTERED_EVENT, onRegistered as EventListener);
-        };
-    }, [ref.v, discordMessageId, channelId, authorId, strippedContent, attachmentUrls.join("|")]);
-
-    const meta = FLAIR_META[state];
+        void computeFlairState(input).then(result => {
+            if (cancelled) return;
+            setState(result);
+        });
+        return () => { cancelled = true; };
+        // attachmentUrls is captured by reference inside `input`; join it
+        // for the dep array so a URL list change re-runs.
+    }, [record, discordMessageId, channelId, authorId, strippedContent, attachmentUrls.join("|")]);
 
     /*
      * Portal the badge inline at the end of the message content (the
      * `[id^="message-content-"]` div Discord renders the markdown into),
      * so it flows after the message text the way the native "(edited)"
-     * marker does. This avoids the previous overlay approach taking up a
-     * full line on multi-line messages, and the badge naturally follows
-     * the last word of the message wherever it ends.
-     *
-     * Discord re-renders message-content from scratch on edits and on a
-     * handful of other interactions, which wipes any imperatively-added
-     * children (including our portal host span). A MutationObserver on
-     * the message <li> lets us detect that and re-attach the host so the
-     * badge survives edits, reactions, embed loads, etc.
+     * marker does. The anchor span is always rendered so the layout
+     * effect runs regardless of whether we have a record yet — that way
+     * a record landing later still finds the right DOM target.
      */
     const anchorRef = useRef<HTMLSpanElement | null>(null);
     const [overlayHost, setOverlayHost] = useState<HTMLElement | null>(null);
@@ -429,12 +543,6 @@ function MainMessageBadge({ message, ref_ }: { message: any; ref_: VeilSigRef; }
         if (!li) return;
         if (!discordMessageId) return;
 
-        // Match the message body by its EXACT id. A bare
-        // `[id^="message-content-"]` selector also matches the
-        // replied-to-message snippet that Discord renders inside the
-        // same <li> (which has id `message-content-<refId>`), so on
-        // reply messages the badge would portal into the reply preview
-        // instead of the actual body.
         const contentSelector = `#message-content-${CSS.escape(discordMessageId)}`;
 
         let attached: HTMLElement | null = null;
@@ -453,13 +561,6 @@ function MainMessageBadge({ message, ref_ }: { message: any; ref_: VeilSigRef; }
                 host = document.createElement("span");
                 host.className = "vc-veil-sig-overlay";
             }
-            // Always (re-)append so the host stays the LAST child of
-            // the content node. Discord rebuilds message-content
-            // children on edits, embed/attachment hydrations and
-            // reaction toggles, which can reorder our host to the
-            // start so the badge ends up on the left of the text.
-            // `appendChild` on an already-last-child is a no-op,
-            // otherwise it moves it back to the end.
             if (host.parentElement !== content || host !== content.lastElementChild) {
                 content.appendChild(host);
             }
@@ -485,7 +586,13 @@ function MainMessageBadge({ message, ref_ }: { message: any; ref_: VeilSigRef; }
         };
     }, [discordMessageId]);
 
-    const badge = (
+    // No record yet (channel still loading, message isn't signed, or
+    // record landed as a miss). Render the anchor so the portal-mount
+    // effect stays wired, but don't show a badge.
+    const showBadge = !!record && state !== "loading";
+
+    const meta = FLAIR_META[state];
+    const badge = showBadge ? (
         <button
             type="button"
             className={meta.className}
@@ -493,7 +600,7 @@ function MainMessageBadge({ message, ref_ }: { message: any; ref_: VeilSigRef; }
                 openModal(modalProps => (
                     <VerifyModal
                         modalProps={modalProps}
-                        sigRef={ref}
+                        sigRef={{ v: 4 }}
                         discordMessageId={discordMessageId}
                         channelId={channelId}
                         authorId={authorId}
@@ -511,12 +618,12 @@ function MainMessageBadge({ message, ref_ }: { message: any; ref_: VeilSigRef; }
             <StateGlyph state={state} />
             <span className="vc-veil-sig-dot__label">{meta.label}</span>
         </button>
-    );
+    ) : null;
 
     return (
         <>
             <span ref={anchorRef} className="vc-veil-sig-anchor" aria-hidden="true" />
-            {overlayHost && ReactDOM.createPortal(badge, overlayHost)}
+            {badge && overlayHost && ReactDOM.createPortal(badge, overlayHost)}
         </>
     );
 }
@@ -542,13 +649,11 @@ function ReplyContextBadge({
         [refChannelId, refMessageId]
     ) as any;
 
-    const ref = extractVeilSigRef(refMessage?.content);
-
     const authorTag = refMessage?.author
         ? refMessage.author.global_name || refMessage.author.username || refMessage.author.id
         : undefined;
     const authorId: string | null = refMessage?.author?.id ?? null;
-    const channelId: string | null = typeof refMessage?.channel_id === "string"
+    const channelId: string = typeof refMessage?.channel_id === "string"
         ? refMessage.channel_id
         : refChannelId;
     const strippedContent = stripZwc(typeof refMessage?.content === "string" ? refMessage.content : "");
@@ -569,8 +674,34 @@ function ReplyContextBadge({
         }
     })();
 
-    const input: LookupInput | null = ref
-        ? { sigRef: ref, discordMessageId: refMessageId, channelId, strippedContent, authorId, attachmentUrls }
+    useChannelCacheVersion();
+
+    useEffect(() => {
+        if (!channelId) return;
+        installMessageCreateHook();
+        void ensureChannelLoaded(channelId);
+    }, [channelId]);
+
+    useEffect(() => {
+        if (!channelId || !refMessageId) return;
+        const onRegistered = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (!detail || detail.discordMessageId !== refMessageId) return;
+            bustCacheFor(channelId, refMessageId);
+            void liveFetchOne(channelId, refMessageId, { force: true });
+        };
+        window.addEventListener(REGISTERED_EVENT, onRegistered as EventListener);
+        return () => window.removeEventListener(REGISTERED_EVENT, onRegistered as EventListener);
+    }, [refMessageId, channelId]);
+
+    const record = channelId && refMessageId
+        ? channelCaches.get(channelId)?.records.get(refMessageId) ?? null
+        : null;
+
+    const haveAllInputs = !!(record && authorId && channelId && refMessageId);
+
+    const input: LookupInput | null = haveAllInputs
+        ? { record, discordMessageId: refMessageId, channelId, authorId: authorId!, strippedContent, attachmentUrls }
         : null;
     const cacheKey = input ? lookupKey(input) : null;
 
@@ -582,33 +713,12 @@ function ReplyContextBadge({
     useEffect(() => {
         if (!input) return;
         let cancelled = false;
-        let nonce = 0;
-
-        const run = () => {
-            const myNonce = ++nonce;
-            void computeFlairState(input, () => { /* noop */ }).then(result => {
-                if (cancelled || myNonce !== nonce) return;
-                setState(result);
-            });
-        };
-
-        run();
-
-        const onRegistered = (e: Event) => {
-            const detail = (e as CustomEvent).detail;
-            if (!detail || typeof detail.discordMessageId !== "string") return;
-            if (detail.discordMessageId !== refMessageId) return;
-            bustCacheForDiscordMessageId(refMessageId);
-            setState("loading");
-            run();
-        };
-        window.addEventListener(REGISTERED_EVENT, onRegistered as EventListener);
-
-        return () => {
-            cancelled = true;
-            window.removeEventListener(REGISTERED_EVENT, onRegistered as EventListener);
-        };
-    }, [ref?.v, refMessageId, channelId, authorId, strippedContent, attachmentUrls.join("|")]);
+        void computeFlairState(input).then(result => {
+            if (cancelled) return;
+            setState(result);
+        });
+        return () => { cancelled = true; };
+    }, [record, refMessageId, channelId, authorId, strippedContent, attachmentUrls.join("|")]);
 
     const anchorRef = useRef<HTMLSpanElement | null>(null);
     const [host, setHost] = useState<HTMLElement | null>(null);
@@ -633,9 +743,6 @@ function ReplyContextBadge({
                 h = document.createElement("span");
                 h.className = "vc-veil-sig-reply-overlay";
             }
-            // Pin to the front of the reply snippet (before the snippet
-            // text) so the flair leads the line, mirroring how Discord
-            // shows author chips in the same slot.
             if (h.parentElement !== content || h !== content.firstElementChild) {
                 content.insertBefore(h, content.firstChild);
             }
@@ -656,7 +763,9 @@ function ReplyContextBadge({
         return () => observer.disconnect();
     }, [refMessageId]);
 
-    if (!ref || !input) {
+    const showBadge = !!record && state !== "loading";
+
+    if (!showBadge) {
         return <span ref={anchorRef} className="vc-veil-sig-anchor" aria-hidden="true" />;
     }
 
@@ -670,7 +779,7 @@ function ReplyContextBadge({
                 openModal(modalProps => (
                     <VerifyModal
                         modalProps={modalProps}
-                        sigRef={ref}
+                        sigRef={{ v: 4 }}
                         discordMessageId={refMessageId}
                         channelId={channelId}
                         authorId={authorId}

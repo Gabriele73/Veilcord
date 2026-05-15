@@ -23,10 +23,10 @@ const BUTTON_ID = "veil-sign";
 let lastEnabled = false;
 
 interface Pending {
-    /** Final Discord content (visible body + ZWC marker) — used to match the MESSAGE_CREATE event. */
+    /** Visible Discord content used to match the MESSAGE_CREATE event. */
     matchContent: string;
     publicKey: string;
-    /** Plain text the user typed, including the trailing space that fences the ZWC marker. */
+    /** Plain text the user typed. Bound into the v4 canonical body. */
     plainText: string;
     /** True iff this message had attachments at send-time and needs late hashing. */
     needsAttachmentBinding: boolean;
@@ -35,6 +35,14 @@ interface Pending {
 
 const PENDING_TTL_MS = 30_000;
 const pendingByChannel = new Map<string, Pending[]>();
+
+/**
+ * Discord message ids this client signed during the current session.
+ * Used by the edit-blocker to refuse edits on freshly-signed messages
+ * even though they no longer carry a ZWC marker. Legacy ZWC-marked
+ * messages still hit the blocker via `VeilZwc.hasSignedMessageRef`.
+ */
+const signedThisSession = new Set<string>();
 
 /**
  * v4 signed records are only accepted by the backend, and only render
@@ -174,6 +182,8 @@ async function finalizeAndRegister(message: any, pending: Pending): Promise<void
 
     await registerOnBackend(discordMessageId, signedBody, pending.publicKey, signature);
 
+    signedThisSession.add(discordMessageId);
+
     try {
         window.dispatchEvent(new CustomEvent("veil:signed-message:registered", {
             detail: { discordMessageId }
@@ -207,33 +217,12 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
         }
 
         const publicKey = await cryptoService.getPublicKey();
-        const marker = VeilZwc.encodeMarker();
-        // Insert a single regular space between the user's text and the
-        // ZWC marker. Discord's server-side URL extractor uses `\S+`, so
-        // a URL at the very end of the message would otherwise consume
-        // every zero-width marker char into the URL token and the embed
-        // pipeline would silently drop it. A trailing space terminates
-        // the URL match cleanly, and chat rendering hides it.
-        //
-        // Skip the fence when the user typed nothing (attachment-only
-        // send): Discord normalizes a whitespace-prefixed, otherwise
-        // invisible content down to just the ZWC marker before it hits
-        // the server, so keeping the leading space here would make the
-        // MESSAGE_CREATE content diverge from `pending.matchContent`
-        // and the signature would never get registered.
-        //
-        // Both visible body and canonical body include this space so
-        // the receiver's `stripZwc` (which only removes ZWC chars,
-        // not whitespace) gives back the same string the sender signed.
-        const visibleBody = text.length > 0 ? text + " " : "";
-        const finalContent = visibleBody + marker;
 
-        if (finalContent.length > 2000) {
-            showToast(`Sign mode: message is too long by ${finalContent.length - 2000} chars.`, Toasts.Type.FAILURE);
-            return { cancel: true };
-        }
-
-        messageObj.content = finalContent;
+        // No ZWC marker is appended to the outgoing body — the
+        // verifier discovers signed messages via the per-channel
+        // signed-record pre-fetch and the live MESSAGE_CREATE lookup,
+        // not via an inline stego trailer. The visible content is
+        // exactly what the user typed.
 
         // v4 canonical bodies bind the Discord message id, channel id
         // and sender uid into the signed bytes. The message id only
@@ -241,9 +230,9 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
         // to MESSAGE_CREATE — for both text-only and attachment-bearing
         // messages.
         pushPending(channelId, {
-            matchContent: finalContent,
+            matchContent: text,
             publicKey,
-            plainText: visibleBody,
+            plainText: text,
             needsAttachmentBinding: uploads.length > 0,
             expiresAt: Date.now() + PENDING_TTL_MS
         });
@@ -254,17 +243,24 @@ const sendListener: MessageSendListener = async (channelId, messageObj, options)
 };
 
 /*
- * Block edits on signed messages. Discord's edit flow re-sends the
- * new content as the new body — without our ZWC marker and without
- * touching the backend signature record. The receiver would still
- * have a marker-less edited body matched against an old signature
- * that doesn't cover it, so the badge would flip to "Invalid" the
- * moment the edit lands. Force the user to delete + resend instead.
+ * Block edits on signed messages. Discord's edit flow re-sends the new
+ * content as the new body without touching the backend signature
+ * record. The verifier would rebuild the canonical body from the new
+ * content and flip the badge to "Invalid" the moment the edit lands.
+ * Force the user to delete + resend instead.
+ *
+ * Detection sources:
+ *   - `signedThisSession`: messages this client signed since launch.
+ *     Covers the common case where the sender edits right after sending.
+ *   - `VeilZwc.hasSignedMessageRef`: legacy v3/v4 ZWC-marked messages
+ *     already in history that predate the no-marker rollout.
  */
 const editListener: MessageEditListener = async (channelId, messageId) => {
-    const original = MessageStore.getMessage?.(channelId, messageId);
-    const content = typeof original?.content === "string" ? original.content : "";
-    if (!VeilZwc.hasSignedMessageRef(content)) return;
+    if (!signedThisSession.has(messageId)) {
+        const original = MessageStore.getMessage?.(channelId, messageId);
+        const content = typeof original?.content === "string" ? original.content : "";
+        if (!VeilZwc.hasSignedMessageRef(content)) return;
+    }
     showToast("Signed Veil messages can't be edited. Delete and resend.", Toasts.Type.FAILURE);
     return { cancel: true };
 };
@@ -397,6 +393,7 @@ export default definePlugin({
         window.removeEventListener(MODE_E2E_ON_EVENT, disableSignMode);
         window.removeEventListener("veil-mode:request-sign", onModeRequestSign as EventListener);
         pendingByChannel.clear();
+        signedThisSession.clear();
         lastEnabled = false;
     }
 });
