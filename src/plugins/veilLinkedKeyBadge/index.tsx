@@ -8,38 +8,41 @@ import { addProfileBadge, BadgePosition, ProfileBadge, removeProfileBadge } from
 import { fetchBindingsByDiscordUid } from "@plugins/veilCrypto";
 import { Devs } from "@utils/constants";
 import definePlugin from "@utils/types";
-import { useEffect, useState } from "@webpack/common";
+import { FluxDispatcher, UserProfileStore } from "@webpack/common";
 
 /*
- * Inline green key SVG. Colors are baked into the SVG itself (not
- * `currentColor`) because Discord's badge slot doesn't propagate a
- * useful inherited color and the icon would otherwise vanish on
- * some themes (see CLAUDE.md UI contrast notes).
+ * Inline key icon (Lucide-style stroke). The stroke colour is baked
+ * into the SVG itself rather than relying on `currentColor`, because
+ * Discord's badge slot doesn't inherit a usable text colour and the
+ * icon would otherwise vanish on some themes (CLAUDE.md UI contrast
+ * rule). 24x24 viewBox matches Discord's native badge sizing.
  */
-const KEY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">
-    <path fill="#3ba55c" d="M14.5 3a6.5 6.5 0 1 0 6.32 8.05.75.75 0 0 0-.18-.74l-1.16-1.16a.75.75 0 0 0-1.06 0l-.97.97a.75.75 0 0 1-1.06 0l-1.06-1.06a.75.75 0 0 1 0-1.06l.97-.97a.75.75 0 0 0 0-1.06l-.79-.79A6.47 6.47 0 0 0 14.5 3Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm.5 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/>
-    <path fill="#3ba55c" d="m11.5 11.91-7.97 7.97a1.25 1.25 0 0 0 0 1.77l1.06 1.06a1.25 1.25 0 0 0 1.77 0l.97-.97a.75.75 0 0 0 .22-.53V20h1.2a.75.75 0 0 0 .53-.22l.97-.97a.75.75 0 0 0 .22-.53V17h1.2a.75.75 0 0 0 .53-.22l1.06-1.06a.75.75 0 0 0 .22-.53v-1.69a6.55 6.55 0 0 1-1.98-1.59Z"/>
-</svg>`;
+const KEY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3ba55c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/><path d="M15.5 7.5l3 3L22 7l-3-3"/></svg>`;
 
 const KEY_ICON = "data:image/svg+xml;base64," + btoa(KEY_ICON_SVG);
 
 const REPO_URL = "https://github.com/Gabriele73/Veilcord";
 
 /*
- * The Badges API gates badges through a synchronous `shouldShow`, but
- * the binding lookup is async. Rather than fight Discord's render
- * lifecycle from outside React, the badge always opts in via
- * `shouldShow` and a React component owns the async state with hooks.
- * When the lookup resolves negatively the component renders `null`,
- * collapsing to nothing in the badge row. When it resolves positively
- * the component renders the green key image and Discord's tooltip
- * wrapper picks up `description` for the "Veil User" label and
- * `link` for the click-through.
+ * `shouldShow` runs synchronously per badge render, but the binding
+ * lookup is async, so the badge is driven by a module-scope cache.
  *
- * Results are cached at module scope so reopening the same profile
- * (or seeing the same user across multiple surfaces) doesn't refetch
- * every time. Negatives are TTL-cached so we eventually re-check a
- * user who linked a key after their profile was first viewed.
+ *   undefined       → never checked, kick off a fetch, return false.
+ *   { value: false }→ recently checked, no key, return false (TTL'd).
+ *   { value: true } → user has at least one linked key, return true.
+ *
+ * After a fetch flips a uid to `true` we re-dispatch
+ * USER_PROFILE_FETCH_SUCCESS for the cached profile. UserProfileStore
+ * mints a fresh profile reference, the memoised profile components
+ * re-render, `getBadges()` runs again, and our now-true `shouldShow`
+ * lets the badge through. Without this replay, the first profile open
+ * would never see the badge until it was closed and reopened.
+ *
+ * On boot we also subscribe to USER_PROFILE_MODAL_OPEN and
+ * USER_PROFILE_FETCH_SUCCESS so the lookup is kicked off as soon as
+ * a profile starts loading, not just when the badge surface asks
+ * about it. That removes the visible "blink" between a profile
+ * opening and the badge appearing for already-cached uids.
  */
 const NEGATIVE_TTL_MS = 5 * 60 * 1000;
 
@@ -60,18 +63,29 @@ function readCache(userId: string): boolean | null {
     return null;
 }
 
-function lookup(userId: string): Promise<boolean> {
-    const cached = readCache(userId);
-    if (cached !== null) return Promise.resolve(cached);
+function forceProfileRerender(userId: string): void {
+    try {
+        const profile = (UserProfileStore as any).getUserProfile?.(userId);
+        if (profile) {
+            FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCESS", userProfile: profile });
+        }
+    } catch {
+        /* re-render is best-effort; the badge will appear next time
+           the profile renders even if this dispatch can't fire. */
+    }
+}
 
-    const existing = inflight.get(userId);
-    if (existing) return existing;
+function lookup(userId: string): void {
+    if (!isLikelyDiscordUid(userId)) return;
+    if (readCache(userId) !== null) return;
+    if (inflight.has(userId)) return;
 
     const promise = fetchBindingsByDiscordUid(userId).then(
         result => {
             const rows = Array.isArray(result?.bindings) ? result.bindings : [];
             const hasActive = rows.some(r => r && r.unlinkedAt == null && typeof r.publicKey === "string");
             cache.set(userId, { value: hasActive, at: Date.now() });
+            if (hasActive) forceProfileRerender(userId);
             return hasActive;
         },
         () => {
@@ -83,51 +97,34 @@ function lookup(userId: string): Promise<boolean> {
     });
 
     inflight.set(userId, promise);
-    return promise;
-}
-
-function VeilLinkedKeyIcon({ userId }: { userId: string; }) {
-    const initial = readCache(userId);
-    const [linked, setLinked] = useState<boolean | null>(initial);
-
-    useEffect(() => {
-        if (!isLikelyDiscordUid(userId)) {
-            setLinked(false);
-            return;
-        }
-        const synchronous = readCache(userId);
-        if (synchronous !== null) {
-            setLinked(synchronous);
-            return;
-        }
-        let cancelled = false;
-        lookup(userId).then(value => {
-            if (!cancelled) setLinked(value);
-        });
-        return () => { cancelled = true; };
-    }, [userId]);
-
-    if (!linked) return null;
-
-    return (
-        <img
-            src={KEY_ICON}
-            alt=" "
-            aria-hidden
-            style={{ width: "1em", height: "1em" }}
-        />
-    );
 }
 
 const linkedKeyBadge: ProfileBadge = {
     id: "veil-linked-key-badge",
     description: "Veil User",
+    iconSrc: KEY_ICON,
     position: BadgePosition.END,
     link: REPO_URL,
-    component: VeilLinkedKeyIcon as ProfileBadge["component"],
-    key: "veil-linked-key",
-    shouldShow: ({ userId }) => isLikelyDiscordUid(userId)
+    shouldShow: ({ userId }) => {
+        if (!isLikelyDiscordUid(userId)) return false;
+        const cached = readCache(userId);
+        if (cached === null) {
+            lookup(userId);
+            return false;
+        }
+        return cached;
+    }
 };
+
+function onProfileOpen(data: any) {
+    const userId = data?.userId ?? data?.user?.id;
+    if (typeof userId === "string") lookup(userId);
+}
+
+function onProfileFetch(data: any) {
+    const userId = data?.userProfile?.userId ?? data?.userProfile?.user?.id;
+    if (typeof userId === "string") lookup(userId);
+}
 
 export default definePlugin({
     name: "VeilLinkedKeyBadge",
@@ -138,9 +135,13 @@ export default definePlugin({
 
     start() {
         addProfileBadge(linkedKeyBadge);
+        FluxDispatcher.subscribe("USER_PROFILE_MODAL_OPEN", onProfileOpen);
+        FluxDispatcher.subscribe("USER_PROFILE_FETCH_SUCCESS", onProfileFetch);
     },
 
     stop() {
+        FluxDispatcher.unsubscribe("USER_PROFILE_MODAL_OPEN", onProfileOpen);
+        FluxDispatcher.unsubscribe("USER_PROFILE_FETCH_SUCCESS", onProfileFetch);
         removeProfileBadge(linkedKeyBadge);
         cache.clear();
         inflight.clear();
