@@ -70,11 +70,15 @@ export function E2eBadge({ messageId }: { messageId: string; }) {
     }, [messageId]);
 
     /*
-     * Portal the badge into the trailing edge of the message-content
-     * element, the same slot the signed-message check uses, so it flows
-     * after the last word the way the native "(edited)" marker does.
-     * MutationObserver re-attaches if Discord rebuilds the content node
-     * (edits, reactions, embed loads).
+     * Portal the badge into the message-content element so the flair
+     * flows inline with the text. We only ensure the host is *attached*
+     * to the content node, not that it stays the last child. Fighting
+     * Discord for last-child position via a subtree MutationObserver
+     * deadlocks the renderer when Discord inserts siblings after our
+     * host (embed previews, syntax-highlight passes, reaction bars,
+     * etc.): every re-append is itself a mutation that re-fires the
+     * observer, and Discord just re-inserts on the next tick. Position
+     * is handled by CSS instead.
      */
     const anchorRef = useRef<HTMLSpanElement | null>(null);
     const [host, setHost] = useState<HTMLElement | null>(null);
@@ -85,42 +89,34 @@ export function E2eBadge({ messageId }: { messageId: string; }) {
         const li = anchor.closest("li[id^=\"chat-messages-\"]") as HTMLElement | null;
         if (!li) return;
 
-        let attached: HTMLElement | null = null;
+        let current: HTMLElement | null = null;
 
         const ensureHost = () => {
             const content = li.querySelector("[id^=\"message-content-\"]") as HTMLElement | null;
             if (!content) {
-                if (attached) { attached = null; setHost(null); }
+                if (current) { current = null; setHost(null); }
                 return;
             }
             let h = content.querySelector(":scope > .vc-veil-e2e-overlay") as HTMLElement | null;
             if (!h) {
                 h = document.createElement("span");
                 h.className = "vc-veil-e2e-overlay";
-            }
-            // Always (re-)append so the host stays the last child of
-            // the content node. Discord re-renders message-content
-            // children on edits, embed/attachment hydrations and
-            // reaction toggles, which can reorder our host to the
-            // start (the badge ends up on the left of the text).
-            // `appendChild` on an already-last-child is a no-op,
-            // otherwise it moves it back to the end.
-            if (h.parentElement !== content || h !== content.lastElementChild) {
                 content.appendChild(h);
             }
-            if (attached !== h) { attached = h; setHost(h); }
+            if (current !== h) { current = h; setHost(h); }
         };
 
         ensureHost();
 
+        // Observe only direct children of the li so we re-attach if
+        // Discord rebuilds the message-content node wholesale (edits,
+        // re-renders). We do NOT observe subtree mutations, since those
+        // fire on every embed/reaction/highlight tick and would trap us
+        // in a render loop with no upside.
         const observer = new MutationObserver(() => {
-            const ok = attached
-                && attached.isConnected
-                && attached.parentElement?.id?.startsWith("message-content-") === true
-                && attached === attached.parentElement.lastElementChild;
-            if (!ok) ensureHost();
+            if (!current || !current.isConnected) ensureHost();
         });
-        observer.observe(li, { childList: true, subtree: true });
+        observer.observe(li, { childList: true });
         return () => observer.disconnect();
     }, [messageId]);
 

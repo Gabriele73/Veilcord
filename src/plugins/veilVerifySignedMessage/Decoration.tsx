@@ -560,8 +560,6 @@ function MainMessageBadge({ message }: { message: any; }) {
             if (!host) {
                 host = document.createElement("span");
                 host.className = "vc-veil-sig-overlay";
-            }
-            if (host.parentElement !== content || host !== content.lastElementChild) {
                 content.appendChild(host);
             }
             if (attached !== host) {
@@ -572,14 +570,15 @@ function MainMessageBadge({ message }: { message: any; }) {
 
         ensureHost();
 
+        // Direct childList only. Subtree observation here deadlocks the
+        // renderer: every time we re-append to chase last-child, the
+        // append is itself a subtree mutation that re-fires the
+        // observer, and Discord re-inserts on the next tick (embeds,
+        // reactions, syntax highlight). Position is a CSS concern.
         const observer = new MutationObserver(() => {
-            const ok = attached
-                && attached.isConnected
-                && attached.parentElement?.id === `message-content-${discordMessageId}`
-                && attached === attached.parentElement.lastElementChild;
-            if (!ok) ensureHost();
+            if (!attached || !attached.isConnected) ensureHost();
         });
-        observer.observe(li, { childList: true, subtree: true });
+        observer.observe(li, { childList: true });
 
         return () => {
             observer.disconnect();
@@ -742,8 +741,6 @@ function ReplyContextBadge({
             if (!h) {
                 h = document.createElement("span");
                 h.className = "vc-veil-sig-reply-overlay";
-            }
-            if (h.parentElement !== content || h !== content.firstElementChild) {
                 content.insertBefore(h, content.firstChild);
             }
             if (attached !== h) { attached = h; setHost(h); }
@@ -751,14 +748,12 @@ function ReplyContextBadge({
 
         ensureHost();
 
+        // Direct childList only. See main badge for why subtree
+        // observation deadlocks here.
         const observer = new MutationObserver(() => {
-            const ok = attached
-                && attached.isConnected
-                && attached.parentElement?.id === `message-content-${refMessageId}`
-                && attached === attached.parentElement.firstElementChild;
-            if (!ok) ensureHost();
+            if (!attached || !attached.isConnected) ensureHost();
         });
-        observer.observe(li, { childList: true, subtree: true });
+        observer.observe(li, { childList: true });
 
         return () => observer.disconnect();
     }, [refMessageId]);

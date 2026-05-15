@@ -7,7 +7,7 @@
 import * as DataStore from "@api/DataStore";
 import { proxyLazy } from "@utils/lazy";
 import { findByCodeLazy } from "@webpack";
-import { FluxDispatcher, UserStore } from "@webpack/common";
+import { ChannelStore, FluxDispatcher, UserStore } from "@webpack/common";
 
 /*
  * Discord stores expect real ChannelRecord / MessageRecord / UserRecord
@@ -36,6 +36,7 @@ export const VEIL_SYSTEM_CHANNEL_ID = "9999900000000000002";
 const MESSAGES_KEY = "VeilSystemDM_messages_v1";
 const COUNTER_KEY = "VeilSystemDM_counter_v1";
 const WELCOME_SHOWN_KEY = "VeilSystemDM_welcome_shown_v1";
+const ID_MIGRATION_KEY = "VeilSystemDM_id_migrated_v2";
 
 export interface StoredMessage {
     id: string;
@@ -115,16 +116,71 @@ export function buildMessage(stored: StoredMessage): any {
 }
 
 /*
- * Allocate a monotonically-increasing synthetic message id. Persisting
- * the counter means ids stay unique across restarts, so MessageStore
- * never sees a collision with a previously-replayed message.
+ * Build a Discord-format snowflake from a millisecond timestamp.
+ *
+ * Layout (64 bits):
+ *   bits 63..22 : (ts - DISCORD_EPOCH_MS)
+ *   bits 21..17 : worker id  (we use 31 — out of Discord's allocation)
+ *   bits 16..12 : process id (we use 31 — out of Discord's allocation)
+ *   bits 11..0  : 12-bit increment
+ *
+ * The synthetic channel's `lastMessageId` is the DM list's sort key, so
+ * generating message ids from the message's real timestamp lets the
+ * channel float to its natural position by recency instead of being
+ * pinned at the top by an out-of-range id like the legacy "99999..."
+ * scheme produced.
  */
-async function nextMessageId(): Promise<string> {
-    const counter = (await DataStore.get<number>(COUNTER_KEY)) ?? 0;
-    const next = counter + 1;
-    await DataStore.set(COUNTER_KEY, next);
-    // 19-digit id: "99999" prefix + 14 digits of counter, zero-padded.
-    return "99999" + String(next).padStart(14, "0");
+const DISCORD_EPOCH_MS = 1420070400000;
+let snowflakeIncrement = 0;
+
+function makeMessageSnowflake(timestampMs: number): string {
+    const safeTs = Math.max(timestampMs, DISCORD_EPOCH_MS + 1);
+    const tsBits = BigInt(safeTs - DISCORD_EPOCH_MS) << 22n;
+    const workerBits = 31n << 17n;
+    const processBits = 31n << 12n;
+    const inc = BigInt((snowflakeIncrement++) & 0xFFF);
+    return (tsBits | workerBits | processBits | inc).toString();
+}
+
+/*
+ * Allocate a synthetic message id derived from `now`. Within a single
+ * millisecond the 12-bit increment guarantees uniqueness up to 4096
+ * messages, far beyond anything VeilSystemDM ever produces.
+ */
+function nextMessageId(): string {
+    return makeMessageSnowflake(Date.now());
+}
+
+/*
+ * One-shot migration that rewrites any persisted message ids in the
+ * legacy "99999..." namespace to real Discord-format snowflakes derived
+ * from each message's stored timestamp. Without this, the most recent
+ * stored message keeps the channel pinned to the top of the DM list
+ * even after we switch the snowflake generator.
+ *
+ * Idempotent: a flag in DataStore guarantees this runs at most once.
+ */
+async function migrateLegacyMessageIds(): Promise<void> {
+    const already = await DataStore.get<boolean>(ID_MIGRATION_KEY);
+    if (already) return;
+    try {
+        const stored = (await DataStore.get<StoredMessage[]>(MESSAGES_KEY)) ?? [];
+        if (stored.length === 0) {
+            await DataStore.set(ID_MIGRATION_KEY, true);
+            return;
+        }
+        const sorted = [...stored].sort((a, b) => a.timestamp - b.timestamp);
+        const rewritten: StoredMessage[] = sorted.map(m => ({
+            id: makeMessageSnowflake(m.timestamp),
+            content: m.content,
+            timestamp: m.timestamp
+        }));
+        await DataStore.set(MESSAGES_KEY, rewritten);
+        await DataStore.del(COUNTER_KEY);
+        await DataStore.set(ID_MIGRATION_KEY, true);
+    } catch (e: any) {
+        console.warn("[VeilSystemDM] id migration failed:", e?.message ?? e);
+    }
 }
 
 async function loadMessages(): Promise<StoredMessage[]> {
@@ -152,6 +208,10 @@ function injectUser(): void {
  */
 export function injectChannel(): void {
     injectUser();
+    if (ChannelStore.getChannel?.(VEIL_SYSTEM_CHANNEL_ID)) {
+        lastInjectedChannel = true;
+        return;
+    }
     FluxDispatcher.dispatch({
         type: "CHANNEL_CREATE",
         channel: createChannelRecordFromServer(buildChannel())
@@ -188,6 +248,7 @@ export async function seedMessages(): Promise<void> {
 }
 
 export async function reinject(): Promise<void> {
+    await migrateLegacyMessageIds();
     injectChannel();
     await seedMessages();
 }
@@ -216,7 +277,7 @@ export async function postVeilSystemMessage(
     if (!lastInjectedChannel) injectChannel();
 
     const stored: StoredMessage = {
-        id: await nextMessageId(),
+        id: nextMessageId(),
         content: opts.content,
         timestamp: Date.now()
     };
