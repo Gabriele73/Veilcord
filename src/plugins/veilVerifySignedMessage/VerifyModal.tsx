@@ -102,6 +102,9 @@ export function VerifyModal({
     const [copyHint, setCopyHint] = useState<string | null>(null);
     /** True iff verification succeeded against the attachments-bound canonical body. */
     const [attachmentsBound, setAttachmentsBound] = useState<boolean | null>(null);
+    /** Exact byte sequence (UTF-8 string) that Ed25519 signed over. Exposed so
+     *  the user can copy it and verify with any third-party Ed25519 tool. */
+    const [canonicalPayload, setCanonicalPayload] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -154,6 +157,7 @@ export function VerifyModal({
                             senderUid: authorId
                         };
                         const canonical = VeilSignedBody.buildCanonicalSignedBodyV4(strippedContent, hashes, ctx);
+                        setCanonicalPayload(canonical);
                         ok = await cryptoService.verify(canonical, normalized.signature, normalized.publicKey);
                         if (ok) bound = attachmentUrls.length > 0 ? true : null;
                     }
@@ -275,6 +279,7 @@ export function VerifyModal({
             setStatus("loading");
             setErrorMsg(null);
             setRecord(null);
+            setCanonicalPayload(null);
             void tryFetch();
         };
 
@@ -381,6 +386,27 @@ export function VerifyModal({
                                     </Button>
                                 </Flex>
                             </section>
+
+                            {canonicalPayload && (
+                                <section>
+                                    <HeadingTertiary>Signed payload</HeadingTertiary>
+                                    <Paragraph style={{ margin: "0 0 8px", color: "var(--text-muted, #949ba4)", fontSize: "0.8125rem" }}>
+                                        These are the exact bytes Ed25519 signed over. Copy them and run any third-party verifier against the public key and signature above to confirm the result yourself.
+                                    </Paragraph>
+                                    <Flex alignItems="stretch" gap={8}>
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <CodeBlock content={canonicalPayload} lang="" />
+                                        </div>
+                                        <Button
+                                            variant="secondary"
+                                            size="small"
+                                            onClick={() => copy("Signed payload", canonicalPayload)}
+                                        >
+                                            Copy
+                                        </Button>
+                                    </Flex>
+                                </section>
+                            )}
 
                             <Divider />
 
