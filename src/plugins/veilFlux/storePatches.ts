@@ -420,6 +420,63 @@ export function installStorePatches(): void {
         return orig(guild);
     });
 
+    // Native Discord's getGuildPermissions hits the owner-shortcut for our
+    // synthetic guild (we pin ownerId to the current user) and returns
+    // ALL_PERMS as a BigInt (e.g. 17873661021126655n). At least one
+    // downstream consumer in the guild-render path then ANDs that BigInt
+    // against a Number-typed permission flag and throws
+    // "Cannot mix BigInt and other types, use explicit conversions",
+    // tearing down the chat shell with a React error boundary. Short-
+    // circuit veil ids to BigInt 0n so the value is type-safe regardless
+    // of which side of the bitwise op the caller treats as authoritative;
+    // veil channels grant their own perms via the boolean `can` patch
+    // above, so a zero-perm guild role-mask is fine.
+    patch(PermissionStore as any, "getGuildPermissions", (orig, context: any) => {
+        const id = typeof context === "string" ? context : context?.id ?? context?.guildId ?? context?.guild_id;
+        if (isVeilGuildId(id)) return 0n;
+        return orig(context);
+    });
+
+    patch(PermissionStore as any, "getGuildPermissionProps", (orig, guild: any) => {
+        const id = typeof guild === "string" ? guild : guild?.id;
+        if (isVeilGuildId(id)) {
+            return {
+                canManageGuild: false,
+                canManageRoles: false,
+                canManageChannels: false,
+                canManageEmojisAndStickers: false,
+                canManageEvents: false,
+                canManageWebhooks: false,
+                canKickMembers: false,
+                canBanMembers: false,
+                canCreateInvite: false,
+                canViewAuditLog: false,
+                canViewGuildInsights: false,
+                canChangeNickname: false,
+                canManageNicknames: false,
+                canManageMessages: false,
+                canManageThreads: false,
+                canModerateMembers: false,
+                canMentionEveryone: false,
+                permissions: 0n
+            };
+        }
+        return orig(guild);
+    });
+
+    patch(PermissionStore as any, "computeBasePermissions", (orig, ...args: any[]) => {
+        const id = typeof args[0] === "string" ? args[0] : args[0]?.id ?? args[1]?.id;
+        if (isVeilGuildId(id)) return 0n;
+        return orig(...args);
+    });
+
+    patch(PermissionStore as any, "computePermissions", (orig, context: any) => {
+        const gid = context?.guild?.id ?? context?.guildId ?? context?.guild_id;
+        const cid = context?.channel?.id ?? context?.channelId ?? context?.channel_id;
+        if (isVeilGuildId(gid) || isVeilChannelId(cid)) return 0n;
+        return orig(context);
+    });
+
     // ---- ChannelStore safety net ----
     // CHANNEL_CREATE dispatches still drive ChannelStore for veil channels;
     // this fallback covers the edge case where a channel is queried before
