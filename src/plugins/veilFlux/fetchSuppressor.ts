@@ -50,7 +50,7 @@ function shouldSuppress(url: string): boolean {
 }
 
 function emptyJsonResponse(status: number): Response {
-    return new Response(JSON.stringify({}), {
+    return new Response("[]", {
         status,
         statusText: status === 204 ? "No Content" : "OK",
         headers: { "Content-Type": "application/json" }
@@ -98,4 +98,16 @@ export function removeFetchSuppressor(): void {
     originalFetch = null;
     originalXhrOpen = null;
     installed = false;
+}
+
+// Eager install at module load. Discord restores its last selected route
+// before the Vencord plugin lifecycle runs `start()`; if the saved route
+// pointed at a Veil synthetic guild, Discord fires the lurker-join and
+// powerups REST calls during boot, well before `installFetchSuppressor`
+// would otherwise run. Side-effecting at import time guarantees the
+// suppressor is in place by the time those early calls fire.
+try {
+    installFetchSuppressor();
+} catch (err) {
+    console.warn("[VeilFlux] eager fetch suppressor install failed", err);
 }
