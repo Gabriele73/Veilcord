@@ -242,22 +242,13 @@ export function installStorePatches(): void {
         return orig(id);
     });
 
-    patch(GuildStore as any, "getGuilds", (orig) => {
-        const real = orig() ?? {};
-        if (guildDataMap.size === 0) return real;
-        const merged = { ...real };
-        for (const [id, data] of guildDataMap) merged[id] = data.record;
-        return merged;
-    });
-
-    patch(GuildStore as any, "getGuildCount", (orig) => {
-        return (orig() ?? 0) + guildDataMap.size;
-    });
-
-    patch(GuildStore as any, "getGuildIds", (orig) => {
-        const real = orig() ?? [];
-        return [...real, ...guildDataMap.keys()];
-    });
+    // Intentionally NOT patching getGuilds / getGuildIds / getGuildCount.
+    // Those feed Discord's "iterate every guild" paths (notification
+    // badges, billing offers, voice presence rollups, ...). Injecting
+    // synthetic veil ids there triggers a long tail of background work
+    // that crashes on synthetic state. The sidebar tile is rendered by
+    // VeilGuildList directly, route resolution + chat shell only touch
+    // getGuild(id), so per-id lookup is enough.
 
     // ---- GuildChannelStore ----
     patch(GuildChannelStore as any, "getChannels", (orig, guildId: string) => {
