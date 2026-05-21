@@ -78,53 +78,80 @@ export function buildGuildPayload(
 
     const channelPayloads = channels.map(c => buildChannelPayload(c, syntheticGuildId));
 
-    return {
+    // Modern Discord splits GUILD_CREATE into top-level lifecycle fields
+    // (channels, members, presences, joined_at, ...) and a nested
+    // `properties` block holding the immutable guild metadata. The
+    // GuildStore data record is built from `properties`; without it the
+    // store logs "Guild data was missing from store, but hash was still
+    // available" and the sidebar refuses to render the tile.
+    const properties = {
         id: syntheticGuildId,
         name: summary.name,
         icon: resolveIcon(summary.icon, summary.uuid),
         description: summary.description ?? null,
         splash: null,
+        discovery_splash: null,
         banner: null,
+        home_header: null,
         owner_id: ownerId,
+        application_id: null,
         region: null,
         afk_channel_id: null,
         afk_timeout: 60,
-        verification_level: 0,
-        default_message_notifications: 1,
-        explicit_content_filter: 0,
-        roles: [everyoneRole],
-        emojis: [],
-        stickers: [],
-        features: [],
-        mfa_level: 0,
-        application_id: null,
-        widget_enabled: false,
-        widget_channel_id: null,
         system_channel_id: null,
         system_channel_flags: 0,
-        rules_channel_id: null,
+        widget_enabled: false,
+        widget_channel_id: null,
+        verification_level: 0,
+        roles: [everyoneRole],
+        default_message_notifications: 1,
+        mfa_level: 0,
+        explicit_content_filter: 0,
+        max_presences: null,
         max_members: 500000,
+        max_stage_video_channel_users: 0,
         max_video_channel_users: 0,
         vanity_url_code: null,
         premium_tier: 0,
         premium_subscription_count: 0,
         preferred_locale: "en-US",
+        rules_channel_id: null,
         public_updates_channel_id: null,
+        safety_alerts_channel_id: null,
         nsfw_level: 0,
         nsfw: false,
         premium_progress_bar_enabled: false,
+        features: [],
+        hub_type: null,
+        latest_onboarding_question_id: null,
+        incidents_data: null,
+        inventory_settings: null,
+        clan: null,
+        version: 1
+    };
+
+    return {
+        ...properties,
+        properties,
+        emojis: [],
+        stickers: [],
         joined_at: joinedAtFromServerId(summary.id),
         large: false,
+        lazy: true,
         unavailable: false,
+        geo_restricted: false,
         member_count: Math.max(summary.memberCount ?? 1, 1),
         voice_states: [],
         members: [],
         channels: channelPayloads,
         threads: [],
         presences: [],
+        stage_instances: [],
         guild_scheduled_events: [],
         embedded_activities: [],
-        soundboard_sounds: []
+        soundboard_sounds: [],
+        application_command_counts: {},
+        data_mode: "full"
     };
 }
 

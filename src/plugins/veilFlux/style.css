@@ -15,29 +15,52 @@
     --veil-divider: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
     --veil-accent: var(--brand-500, #5865f2);
 
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 8px;
-    padding: 4px 0 8px;
+    padding: 10px 0 12px;
+    margin: 6px 0;
 }
+
+/* Discord-style top and bottom dividers framing the Veil block. The label
+   floats centred over the top divider so the section reads like a folder
+   header rather than free-floating text. */
+.vc-veil-guild-stack::before,
+.vc-veil-guild-stack::after {
+    content: "";
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    height: 1px;
+    background: var(--veil-divider);
+    pointer-events: none;
+}
+
+.vc-veil-guild-stack::before { top: 0; }
+.vc-veil-guild-stack::after { bottom: 0; }
 
 .vc-veil-guild-section-label {
+    position: absolute;
+    top: -7px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0 6px;
+    background: var(--background-secondary, #2b2d31);
     font-size: 9px;
     font-weight: 700;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.12em;
     color: var(--veil-section-label);
     text-transform: uppercase;
-    padding: 0 6px;
     user-select: none;
+    border-radius: 4px;
 }
 
+/* Old explicit divider element no longer needed — kept hidden in case any
+   stale tree still renders it. */
 .vc-veil-guild-divider {
-    width: 32px;
-    height: 2px;
-    border-radius: 1px;
-    background: var(--veil-divider);
-    margin: 4px 0 2px;
+    display: none;
 }
 
 .vc-veil-guild-add {

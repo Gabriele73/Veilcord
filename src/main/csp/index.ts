@@ -67,6 +67,9 @@ export const CspPolicies: PolicyMap = {
     // Veil
     "api.veil.rip": ConnectSrc, // Veil backend (VeilCrypto / VeilSignedMessage / VeilVerifySignedMessage)
     "*.veil.rip": ConnectSrc, // Veil canary / staging API hosts
+    "wss://api.veil.rip": ConnectSrc, // Veil per-server WebSocket bridge (VeilFlux Phase 4)
+    "wss://*.veil.rip": ConnectSrc, // Veil canary / staging WebSocket hosts
+    "api.dicebear.com": ImageSrc, // Veil server-side avatar fallback for users without a custom avatar
 };
 
 const findHeader = (headers: PolicyMap, headerName: Lowercase<string>) => {

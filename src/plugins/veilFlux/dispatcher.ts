@@ -5,7 +5,7 @@
  */
 
 import { findByCodeLazy } from "@webpack";
-import { FluxDispatcher, GuildStore } from "@webpack/common";
+import { FluxDispatcher, GuildStore, UserStore } from "@webpack/common";
 
 import { listServerMembers } from "./api/members";
 import { getServerDetail, VeilChannelRecord, VeilServerSummary } from "./api/servers";
@@ -41,6 +41,27 @@ function dispatchGuildCreate(payload: any) {
     FluxDispatcher.dispatch({ type: "GUILD_CREATE", guild: payload });
 }
 
+function dispatchSelfMember(syntheticGuildId: string) {
+    const self = UserStore.getCurrentUser?.();
+    if (!self?.id) return;
+    // Dispatch GUILD_MEMBER_ADD for ourselves so Discord routes to the
+    // guild without triggering the lurker-join REST call (which 404s
+    // against discord.com because the synthetic id isn't a real guild).
+    FluxDispatcher.dispatch({
+        type: "GUILD_MEMBER_ADD",
+        guildId: syntheticGuildId,
+        user: { id: self.id },
+        roles: [],
+        joined_at: new Date().toISOString(),
+        nick: null,
+        avatar: null,
+        deaf: false,
+        mute: false,
+        pending: false,
+        flags: 0
+    });
+}
+
 function dispatchGuildDelete(guildId: string) {
     FluxDispatcher.dispatch({ type: "GUILD_DELETE", guild: { id: guildId, unavailable: false } });
 }
@@ -72,6 +93,7 @@ export function installGuild(summary: VeilServerSummary): string {
     }
     const payload = buildGuildPayload(summary, [], syntheticId);
     dispatchGuildCreate(payload);
+    dispatchSelfMember(syntheticId);
     installedGuildIds.add(syntheticId);
     return syntheticId;
 }
