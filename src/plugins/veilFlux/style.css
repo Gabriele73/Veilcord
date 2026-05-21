@@ -40,6 +40,113 @@
     margin: 4px 0 2px;
 }
 
+.vc-veil-guild-add {
+    width: 48px;
+    height: 48px;
+    border-radius: 24px;
+    border: none;
+    background: var(--veil-icon-bg, #1e1f22);
+    color: var(--green-360, #23a559);
+    font-size: 24px;
+    line-height: 1;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-radius 120ms ease, background-color 120ms ease, color 120ms ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+}
+
+.vc-veil-guild-add:hover {
+    border-radius: 16px;
+    background: var(--green-360, #23a559);
+    color: #ffffff;
+}
+
+.vc-veil-guild-add:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--veil-accent);
+}
+
+/* ===== Join / create modal ===== */
+
+.vc-veil-join-modal {
+    --veil-modal-bg: var(--background-primary, #313338);
+    --veil-modal-text: var(--text-normal, #dbdee1);
+    --veil-modal-text-strong: var(--header-primary, #f2f3f5);
+    --veil-modal-text-muted: var(--text-muted, #949ba4);
+    --veil-modal-card: var(--background-secondary, #2b2d31);
+    --veil-modal-border: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    --veil-modal-accent: var(--brand-500, #5865f2);
+
+    color: var(--veil-modal-text);
+}
+
+.vc-veil-join-modal-title {
+    color: var(--veil-modal-text-strong);
+    margin: 0;
+}
+
+.vc-veil-join-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px 0;
+}
+
+.vc-veil-join-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--veil-modal-border);
+}
+
+.vc-veil-join-tab {
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 8px 12px;
+    color: var(--veil-modal-text-muted, #949ba4);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 120ms ease, border-color 120ms ease;
+}
+
+.vc-veil-join-tab:hover {
+    color: var(--veil-modal-text-strong);
+}
+
+.vc-veil-join-tab--active {
+    color: var(--veil-modal-text-strong);
+    border-bottom-color: var(--veil-modal-accent);
+}
+
+.vc-veil-join-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.vc-veil-join-spacer {
+    margin-top: 8px;
+}
+
+.vc-veil-join-hint {
+    color: var(--veil-modal-text-muted, #949ba4);
+    font-size: 12px;
+}
+
+.vc-veil-join-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--veil-modal-border);
+    margin-top: 4px;
+}
+
 /* Discord guild tiles are 48x48 with a 12px notification pill on the left;
    mimic the layout so Veil tiles line up perfectly with neighbouring real
    Discord guild icons. */

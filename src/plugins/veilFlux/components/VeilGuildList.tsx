@@ -10,6 +10,7 @@ import { NavigationRouter, useEffect, useState } from "@webpack/common";
 import type { VeilServerSummary } from "../api/servers";
 import { ensureGuildDetail } from "../dispatcher";
 import { getState, refreshMyServers, selectServer, subscribe } from "../stores/veilGuildStore";
+import { openVeilJoinModal } from "./VeilJoinModal";
 import { VeilGuildTile } from "./VeilGuildTile";
 
 /**
@@ -48,8 +49,19 @@ export function VeilGuildList() {
     }, []);
 
     if (snapshot.servers.length === 0) {
-        // Nothing to render; sidebar stays as Discord drew it.
-        return null;
+        return (
+            <div className="vc-veil-guild-stack" data-veil-guild-stack="">
+                <div className="vc-veil-guild-section-label" aria-hidden="true">VEIL</div>
+                <button
+                    type="button"
+                    className="vc-veil-guild-add"
+                    aria-label="Join or create a Veil server"
+                    title="Join or create a Veil server"
+                    onClick={() => openVeilJoinModal()}
+                >+</button>
+                <div className="vc-veil-guild-divider" role="separator" aria-hidden="true" />
+            </div>
+        );
     }
 
     const onSelect = (server: VeilServerSummary) => {
@@ -80,6 +92,13 @@ export function VeilGuildList() {
                     onSelect={onSelect}
                 />
             ))}
+            <button
+                type="button"
+                className="vc-veil-guild-add"
+                aria-label="Join or create a Veil server"
+                title="Join or create a Veil server"
+                onClick={() => openVeilJoinModal()}
+            >+</button>
             <div className="vc-veil-guild-divider" role="separator" aria-hidden="true" />
         </div>
     );
