@@ -14,6 +14,7 @@ import definePlugin from "@utils/types";
 import { VeilGuildList } from "./components/VeilGuildList";
 import { uninstallAll } from "./dispatcher";
 import { installAvatarPatch, removeAvatarPatch } from "./avatarPatch";
+import { installFetchSuppressor, removeFetchSuppressor } from "./fetchSuppressor";
 import { installMessageInterceptor, removeMessageInterceptor } from "./messageInterceptor";
 import { installSendInterceptor, removeSendInterceptor } from "./sendInterceptor";
 import { refreshMyServers } from "./stores/veilGuildStore";
@@ -55,13 +56,11 @@ export default definePlugin({
     dependencies: ["VeilCrypto", "ServerListAPI"],
 
     start() {
+        installFetchSuppressor();
         installAvatarPatch();
         installMessageInterceptor();
         installSendInterceptor();
         addServerListElement(ServerListRenderPosition.Above, WrappedVeilGuildList);
-        // Kick off the first load so the sidebar populates ASAP. The store
-        // is also driven by the veilcrypto:state-change event the
-        // cryptoService dispatches on key unlock / link / unlink.
         void refreshMyServers();
     },
 
@@ -70,6 +69,7 @@ export default definePlugin({
         removeSendInterceptor();
         removeMessageInterceptor();
         removeAvatarPatch();
+        removeFetchSuppressor();
         uninstallAll();
     }
 });

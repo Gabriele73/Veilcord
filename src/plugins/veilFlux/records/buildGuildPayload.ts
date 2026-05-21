@@ -79,11 +79,18 @@ export function buildGuildPayload(
     const channelPayloads = channels.map(c => buildChannelPayload(c, syntheticGuildId));
 
     // Modern Discord splits GUILD_CREATE into top-level lifecycle fields
-    // (channels, members, presences, joined_at, ...) and a nested
+    // (channels, members, presences, joined_at, roles, ...) and a nested
     // `properties` block holding the immutable guild metadata. The
     // GuildStore data record is built from `properties`; without it the
     // store logs "Guild data was missing from store, but hash was still
     // available" and the sidebar refuses to render the tile.
+    //
+    // IMPORTANT: roles, emojis, stickers, and the lifecycle arrays live
+    // OUTSIDE properties — putting roles inside properties trips
+    // GuildRoleStore's differential update path ("t.deletes is not
+    // iterable") because the store expects either an array at the top
+    // level or a `{ roles, deletes }` patch shape, not a flat array
+    // nested under properties.
     const properties = {
         id: syntheticGuildId,
         name: summary.name,
@@ -103,7 +110,6 @@ export function buildGuildPayload(
         widget_enabled: false,
         widget_channel_id: null,
         verification_level: 0,
-        roles: [everyoneRole],
         default_message_notifications: 1,
         mfa_level: 0,
         explicit_content_filter: 0,
@@ -133,6 +139,7 @@ export function buildGuildPayload(
     return {
         ...properties,
         properties,
+        roles: [everyoneRole],
         emojis: [],
         stickers: [],
         joined_at: joinedAtFromServerId(summary.id),
