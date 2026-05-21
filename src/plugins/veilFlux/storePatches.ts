@@ -434,6 +434,64 @@ export function installStorePatches(): void {
         }
         return real;
     });
+
+    // ---- Diagnostic instrumentation ----
+    // Wrap every method on the perm-related stores so any call with a veil
+    // guild/channel/role id logs "[VeilFlux/trace] StoreName.method veil-id".
+    // Finds the unpatched method that triggers
+    // "Cannot mix BigInt and other types".
+    instrumentVeilCalls("PermissionStore", PermissionStore);
+    instrumentVeilCalls("GuildRoleStore", GuildRoleStore);
+    instrumentVeilCalls("GuildMemberStore", GuildMemberStore);
+    instrumentVeilCalls("GuildChannelStore", GuildChannelStore);
+    instrumentVeilCalls("GuildStore", GuildStore);
+}
+
+function looksVeil(v: any): boolean {
+    if (typeof v === "string") return isVeilGuildId(v) || isVeilChannelId(v);
+    if (v && typeof v === "object") {
+        const id = v.id ?? v.guild_id ?? v.guildId ?? v.channel_id ?? v.channelId;
+        if (typeof id === "string" && (isVeilGuildId(id) || isVeilChannelId(id))) return true;
+    }
+    return false;
+}
+
+function instrumentVeilCalls(name: string, store: any) {
+    if (!store) return;
+    const proto = Object.getPrototypeOf(store);
+    const keys = new Set<string>([
+        ...Object.getOwnPropertyNames(store),
+        ...(proto ? Object.getOwnPropertyNames(proto) : [])
+    ]);
+    for (const key of keys) {
+        if (key === "constructor" || key.startsWith("_") || key === "addChangeListener" ||
+            key === "removeChangeListener" || key === "emitChange" || key === "getDispatchToken") continue;
+        let fn: any;
+        try { fn = store[key]; } catch { continue; }
+        if (typeof fn !== "function") continue;
+        // Skip if we already patched it above (those wrappers already log
+        // implicitly by handling the veil path).
+        if (patchedTargets.some(e => e.target === store && e.key === key)) continue;
+        const orig = fn.bind(store);
+        const wrapper = function (this: any, ...args: any[]) {
+            const result = orig(...args);
+            if (args.some(looksVeil)) {
+                try {
+                    console.warn(`[VeilFlux/trace] ${name}.${key}`, args, "→", result);
+                } catch { /* ignore */ }
+            }
+            return result;
+        };
+        try {
+            Object.defineProperty(store, key, {
+                value: wrapper,
+                writable: true,
+                configurable: true,
+                enumerable: true
+            });
+            patchedTargets.push({ target: store, key, original: orig });
+        } catch { /* ignore */ }
+    }
 }
 
 export function removeStorePatches(): void {
