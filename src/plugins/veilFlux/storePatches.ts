@@ -75,7 +75,15 @@ function buildEveryoneRole(syntheticGuildId: string): any {
 }
 
 function buildGuildRecordObject(summary: VeilServerSummary, syntheticId: string, everyoneRole: any): any {
-    const ownerId = syntheticOwnerId(summary.id);
+    // Owner-shortcut: pin ownerId to the *current* Discord user. Discord's
+    // permission code paths short-circuit on owner — they skip role math,
+    // skip the BigInt arithmetic in computeBasePermissions / computePermissions,
+    // and grant everything. This avoids the "Cannot mix BigInt and other types"
+    // crash that fires when our patched PermissionStore returns BigInt and
+    // some caller mixes it with Number. Falls back to a synthetic id only
+    // if UserStore isn't ready yet.
+    const self = UserStore?.getCurrentUser?.();
+    const ownerId = self?.id ?? syntheticOwnerId(summary.id);
     const joinedAt = new Date();
     return {
         id: syntheticId,
@@ -390,6 +398,16 @@ export function installStorePatches(): void {
     // ---- PermissionStore ----
     // Grant everything for veil guild + channel ids. Real Discord guilds
     // and channels keep their original gating untouched.
+    //
+    // We deliberately only patch the *boolean* surface (can / canAccessGuild)
+    // and let Discord's compute* / get*Permissions paths run untouched.
+    // Reason: the synthetic guild record pins ownerId to the current user
+    // (see buildGuildRecordObject), and Discord's permission math has an
+    // owner short-circuit that returns full perms without doing any BigInt
+    // arithmetic. Short-circuiting compute* ourselves with a raw BigInt
+    // return value crashed downstream callers with
+    // "Cannot mix BigInt and other types, use explicit conversions" when
+    // they ANDed the result against a Number-typed permission bit.
     patch(PermissionStore as any, "can", (orig, _perm: any, context: any) => {
         const id = context?.guild_id ?? context?.guildId ?? context?.id;
         if (isVeilGuildId(id) || isVeilChannelId(id)) return true;
@@ -399,32 +417,6 @@ export function installStorePatches(): void {
     patch(PermissionStore as any, "canAccessGuild", (orig, guild: any) => {
         if (isVeilGuildId(guild?.id)) return true;
         return orig(guild);
-    });
-
-    patch(PermissionStore as any, "canManageUser", (orig, ...args: any[]) => {
-        return orig(...args);
-    });
-
-    patch(PermissionStore as any, "getGuildPermissions", (orig, guildId: string) => {
-        if (isVeilGuildId(guildId)) return ALL_PERMS;
-        return orig(guildId);
-    });
-
-    patch(PermissionStore as any, "getChannelPermissions", (orig, channelId: string) => {
-        if (isVeilChannelId(channelId)) return ALL_PERMS;
-        return orig(channelId);
-    });
-
-    patch(PermissionStore as any, "computeBasePermissions", (orig, target: any) => {
-        const id = target?.id ?? target;
-        if (isVeilGuildId(id)) return ALL_PERMS;
-        return orig(target);
-    });
-
-    patch(PermissionStore as any, "computePermissions", (orig, target: any) => {
-        const id = target?.id ?? target?.guild_id ?? target?.guildId ?? target;
-        if (isVeilGuildId(id) || isVeilChannelId(id)) return ALL_PERMS;
-        return orig(target);
     });
 
     // ---- ChannelStore safety net ----
