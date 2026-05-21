@@ -34,12 +34,6 @@ import { isVeilChannelId, isVeilGuildId, registerEntity } from "./idMap";
 
 const VEIL_SYNTH_OWNER_PREFIX = "9999990000000000";
 
-// Generous permission bag for veil guilds + channels: every perm bit set
-// up to 53 (safe BigInt). Prevents PermissionStore.can from gating menu
-// items on the synthetic guild while keeping real Discord guilds 100%
-// untouched.
-const ALL_PERMS = (1n << 53n) - 1n;
-
 interface VeilGuildData {
     summary: VeilServerSummary;
     syntheticId: string;
@@ -61,7 +55,14 @@ function buildEveryoneRole(syntheticGuildId: string): any {
     return {
         id: syntheticGuildId,
         name: "@everyone",
-        permissions: String(ALL_PERMS),
+        // Permissions deliberately "0" not ALL_PERMS. Discord parses this
+        // string to a BigInt. Some Discord (and Vencord plugin) code paths
+        // bitwise-op the role permission with a Number-typed flag, which
+        // crashes ("Cannot mix BigInt and other types") when the role
+        // carries a non-zero BigInt. The synthetic guild record pins
+        // ownerId to the current user so Discord's owner-shortcut grants
+        // every permission without ever touching role.permissions.
+        permissions: "0",
         position: 0,
         color: 0,
         hoist: false,
@@ -362,7 +363,7 @@ export function installStorePatches(): void {
             return {
                 id,
                 name: "@everyone",
-                permissions: String(ALL_PERMS),
+                permissions: "0",
                 position: 0,
                 color: 0,
                 hoist: false,
