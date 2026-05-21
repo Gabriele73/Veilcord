@@ -199,16 +199,37 @@ export function setVeilGuildMembers(syntheticGuildId: string, members: VeilMembe
     data.members = members;
 }
 
-const originals: Record<string, any> = {};
+const patchedTargets: Array<{ target: any; key: string; original: any; }> = [];
 let installed = false;
 
 function patch(target: any, key: string, replacement: (...args: any[]) => any) {
-    if (typeof target?.[key] !== "function") return;
-    const original = target[key].bind(target);
-    originals[`${target?.constructor?.name ?? ""}.${key}.${Math.random()}`] = { target, key, original };
-    target[key] = function (this: any, ...args: any[]) {
+    if (!target) return;
+    const original = typeof target[key] === "function" ? target[key].bind(target) : null;
+    const wrapper = function (this: any, ...args: any[]) {
+        if (!original) {
+            return replacement.apply(this, [() => undefined, ...args]);
+        }
         return replacement.apply(this, [original, ...args]);
     };
+    try {
+        Object.defineProperty(target, key, {
+            value: wrapper,
+            writable: true,
+            configurable: true,
+            enumerable: true
+        });
+        patchedTargets.push({ target, key, original: original ?? undefined });
+    } catch (err) {
+        // Some store properties are getters with non-configurable
+        // descriptors. Fall back to direct assignment; if that also
+        // fails the patch silently no-ops and the original method runs.
+        try {
+            target[key] = wrapper;
+            patchedTargets.push({ target, key, original: original ?? undefined });
+        } catch {
+            console.warn(`[VeilFlux] could not patch ${key} on store`, err);
+        }
+    }
 }
 
 export function installStorePatches(): void {
@@ -330,6 +351,51 @@ export function installStorePatches(): void {
         return orig(guildId, roleId);
     });
 
+    patch(GuildRoleStore as any, "getEveryoneRole", (orig, guildIdOrGuild: any) => {
+        const id = typeof guildIdOrGuild === "string" ? guildIdOrGuild : guildIdOrGuild?.id;
+        if (isVeilGuildId(id)) {
+            const data = guildDataMap.get(id);
+            if (data) return data.everyoneRole;
+            // Last-resort synthetic fallback: a render fired before
+            // registerVeilGuild ran. Return a permissive @everyone role
+            // shaped like Discord's so PermissionStore.computeBasePermissions
+            // doesn't throw "Guild does not have an @everyone role".
+            return {
+                id,
+                name: "@everyone",
+                permissions: String(ALL_PERMS),
+                position: 0,
+                color: 0,
+                hoist: false,
+                managed: false,
+                mentionable: false,
+                flags: 0,
+                unicode_emoji: null,
+                icon: null,
+                tags: {}
+            };
+        }
+        return orig(guildIdOrGuild);
+    });
+
+    patch(GuildRoleStore as any, "getNumRoles", (orig, guildId: string) => {
+        if (isVeilGuildId(guildId)) return 1;
+        return orig(guildId);
+    });
+
+    patch(GuildRoleStore as any, "getSortedRoles", (orig, guildId: string) => {
+        if (isVeilGuildId(guildId)) {
+            const data = guildDataMap.get(guildId);
+            return data ? [data.everyoneRole] : [];
+        }
+        return orig(guildId);
+    });
+
+    patch(GuildRoleStore as any, "getRoleColorString", (orig, guildId: string, roleId: string) => {
+        if (isVeilGuildId(guildId)) return null;
+        return orig(guildId, roleId);
+    });
+
     // ---- PermissionStore ----
     // Grant everything for veil guild + channel ids. Real Discord guilds
     // and channels keep their original gating untouched.
@@ -388,11 +454,21 @@ export function installStorePatches(): void {
 
 export function removeStorePatches(): void {
     if (!installed) return;
-    for (const key of Object.keys(originals)) {
-        const { target, key: methodKey, original } = originals[key];
-        try { target[methodKey] = original; } catch { /* ignore */ }
+    for (const entry of patchedTargets) {
+        try {
+            if (entry.original) {
+                Object.defineProperty(entry.target, entry.key, {
+                    value: entry.original,
+                    writable: true,
+                    configurable: true,
+                    enumerable: true
+                });
+            } else {
+                delete entry.target[entry.key];
+            }
+        } catch { /* ignore */ }
     }
-    for (const key of Object.keys(originals)) delete originals[key];
+    patchedTargets.length = 0;
     guildDataMap.clear();
     installed = false;
 }
