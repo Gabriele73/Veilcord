@@ -4,10 +4,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { useEffect, useState } from "@webpack/common";
-
 import { cryptoService } from "@plugins/veilCrypto";
-import { NavigationRouter } from "@plugins/_api/veilDiscord";
+import { NavigationRouter, useEffect, useState } from "@webpack/common";
 
 import type { VeilServerSummary } from "../api/servers";
 import { ensureGuildDetail } from "../dispatcher";
