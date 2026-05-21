@@ -5,79 +5,39 @@
  */
 
 import { findByCodeLazy } from "@webpack";
-import { FluxDispatcher, GuildStore, UserStore } from "@webpack/common";
+import { FluxDispatcher } from "@webpack/common";
 
 import { listServerMembers } from "./api/members";
 import { getServerDetail, VeilChannelRecord, VeilServerSummary } from "./api/servers";
-import { registerEntity } from "./idMap";
-import { dispatchMemberChunk } from "./members/buildMemberPayload";
-import { buildChannelPayload, buildGuildPayload } from "./records/buildGuildPayload";
+import { buildChannelPayload } from "./records/buildGuildPayload";
+import {
+    registerVeilGuild,
+    setVeilGuildChannels,
+    setVeilGuildMembers,
+    unregisterVeilGuild
+} from "./storePatches";
 import { attachServer, detachAll as detachAllSockets } from "./wsBridge";
 
 /**
- * Discord's stores expect real Channel / Guild records, not plain objects.
- * Run our raw payloads through the same factories Discord uses on
- * gateway frames so the resulting instances have the full prototype
- * chain (`isPrivate`, `accessPermissions` getter, etc.).
- *
- * Mirror of the pattern in veilSystemDM/api.ts.
+ * Discord's ChannelStore expects real Channel records, not plain objects.
+ * Run our raw payloads through the same factory Discord uses on gateway
+ * frames so the resulting instances have the full prototype chain
+ * (`isPrivate`, `accessPermissions` getter, etc.).
  */
 const createChannelRecordFromServer: any = findByCodeLazy(".GUILD_TEXT]", "fromServer)");
 
-/**
- * Tracks which Veil guild ids we've registered with Flux. We dispatch
- * GUILD_DELETE on uninstall and on memberships dropping out of the
- * `/me/servers` listing.
- *
- * Channel detail loads lazily on first selection; this map keeps the
- * synthetic channel ids we've already pushed so reselecting a guild
- * re-emits them as no-ops on the store.
- */
 const installedGuildIds = new Set<string>();
 const installedChannelsByGuild = new Map<string, Set<string>>();
 const detailLoadInFlight = new Map<string, Promise<void>>();
 
-function dispatchGuildCreate(payload: any) {
-    // Modern Discord stores chain off GUILD_CREATE — GuildStore,
-    // GuildRoleStore, ReadStateStore, ChannelStore, and a dozen others.
-    // A single store throwing on a missing field aborts the rest of the
-    // chain via the dispatcher. We wrap so a single store crash doesn't
-    // leave half-installed state.
-    try {
-        FluxDispatcher.dispatch({ type: "GUILD_CREATE", guild: payload });
-    } catch (err) {
-        console.warn("[VeilFlux] GUILD_CREATE dispatch threw", err);
-    }
-}
-
-function dispatchSelfMember(syntheticGuildId: string) {
-    const self = UserStore.getCurrentUser?.();
-    if (!self?.id) return;
-    // Dispatch GUILD_MEMBER_ADD for ourselves so Discord routes to the
-    // guild without triggering the lurker-join REST call (which 404s
-    // against discord.com because the synthetic id isn't a real guild).
-    FluxDispatcher.dispatch({
-        type: "GUILD_MEMBER_ADD",
-        guildId: syntheticGuildId,
-        user: { id: self.id },
-        roles: [],
-        joined_at: new Date().toISOString(),
-        nick: null,
-        avatar: null,
-        deaf: false,
-        mute: false,
-        pending: false,
-        flags: 0
-    });
-}
-
-function dispatchGuildDelete(guildId: string) {
-    FluxDispatcher.dispatch({ type: "GUILD_DELETE", guild: { id: guildId, unavailable: false } });
-}
-
-function dispatchChannelCreate(rawChannel: any) {
+function dispatchChannelCreate(rawChannel: any): any {
     const record = createChannelRecordFromServer(rawChannel);
-    FluxDispatcher.dispatch({ type: "CHANNEL_CREATE", channel: record });
+    try {
+        FluxDispatcher.dispatch({ type: "CHANNEL_CREATE", channel: record });
+    } catch (err) {
+        console.warn("[VeilFlux] CHANNEL_CREATE dispatch threw", err);
+    }
+    return record;
 }
 
 function rememberChannel(guildId: string, channelId: string) {
@@ -90,27 +50,23 @@ function rememberChannel(guildId: string, channelId: string) {
 }
 
 /**
- * Push a Veil server into Discord's GuildStore as a real Guild record.
- * Idempotent: a duplicate dispatch with no channel changes is a no-op
- * on the store. Channels load lazily via `ensureGuildDetail`.
+ * Register a Veil server with the in-memory store-patch layer. Replaces
+ * the old GUILD_CREATE dispatch path: rather than pushing a synthesised
+ * payload through Discord's FluxDispatcher (which fights ReadStateStore
+ * / GuildRoleStore / billing internals), we hold the data in our own
+ * map and the patches in `storePatches.ts` short-circuit reads against
+ * it. Idempotent.
  */
 export function installGuild(summary: VeilServerSummary): string {
-    const syntheticId = registerEntity("server", summary.id, summary.uuid);
-    if (GuildStore.getGuild?.(syntheticId)) {
-        installedGuildIds.add(syntheticId);
-        return syntheticId;
-    }
-    const payload = buildGuildPayload(summary, [], syntheticId);
-    dispatchGuildCreate(payload);
-    dispatchSelfMember(syntheticId);
+    const syntheticId = registerVeilGuild(summary);
     installedGuildIds.add(syntheticId);
     return syntheticId;
 }
 
 /**
- * Reconcile the registered Veil guild list against a fresh server list.
- * Servers that disappeared trigger GUILD_DELETE so the sidebar drops
- * them on the next render.
+ * Reconcile the registered Veil guild list against a fresh `/me/servers`
+ * snapshot. Servers that disappeared get unregistered so the sidebar +
+ * patched store reads drop them on the next render.
  */
 export function reconcileGuilds(summaries: VeilServerSummary[]): void {
     const stillPresent = new Set<string>();
@@ -120,7 +76,7 @@ export function reconcileGuilds(summaries: VeilServerSummary[]): void {
     }
     for (const installed of Array.from(installedGuildIds)) {
         if (!stillPresent.has(installed)) {
-            dispatchGuildDelete(installed);
+            unregisterVeilGuild(installed);
             installedGuildIds.delete(installed);
             installedChannelsByGuild.delete(installed);
         }
@@ -128,9 +84,16 @@ export function reconcileGuilds(summaries: VeilServerSummary[]): void {
 }
 
 /**
- * Lazily fetch and dispatch channels for a Veil server. First call hits
- * `/server/{id}` and dispatches CHANNEL_CREATE per channel; subsequent
- * calls deduplicate on the in-memory channel id set and resolve cheaply.
+ * Lazily fetch channels + members for a Veil server. First call hits
+ * `/server/{id}` and `GET /server/{id}/members`; subsequent calls
+ * short-circuit on the in-memory channel set.
+ *
+ * Channels go through Discord's CHANNEL_CREATE dispatch so ChannelStore
+ * sees them; the same records are also stashed on our patch map so
+ * GuildChannelStore.getChannels(syntheticGuildId) returns them.
+ *
+ * Members go through `setVeilGuildMembers` only — no GUILD_MEMBERS_CHUNK
+ * dispatch, since that fights GuildMemberStore's own bookkeeping.
  */
 export async function ensureGuildDetail(serverId: number, syntheticGuildId: string): Promise<void> {
     if (installedChannelsByGuild.has(syntheticGuildId)) return;
@@ -141,16 +104,18 @@ export async function ensureGuildDetail(serverId: number, syntheticGuildId: stri
         try {
             const detail = await getServerDetail(serverId);
             const channels: VeilChannelRecord[] = Array.isArray(detail?.channels) ? detail.channels : [];
+            const channelRecordsByDbId = new Map<number, any>();
             for (const c of channels) {
                 const raw = buildChannelPayload(c, syntheticGuildId);
-                dispatchChannelCreate(raw);
+                const record = dispatchChannelCreate(raw);
                 rememberChannel(syntheticGuildId, raw.id);
+                channelRecordsByDbId.set(c.id, record);
             }
-            // Mark the guild as loaded even when there are no channels yet
-            // so we don't refetch on every selection.
             if (!installedChannelsByGuild.has(syntheticGuildId)) {
                 installedChannelsByGuild.set(syntheticGuildId, new Set());
             }
+            // Wire the channel records into the patched GuildChannelStore.
+            setVeilGuildChannels(syntheticGuildId, channels, channelRecordsByDbId);
 
             // Open the per-server WebSocket and subscribe to every channel
             // the server reported visible. Authoritative perm gating lives
@@ -169,15 +134,15 @@ export async function ensureGuildDetail(serverId: number, syntheticGuildId: stri
                 nickname: null,
                 memberCount: detail.memberCount
             };
+            // Refresh the registered guild record with the latest summary
+            // so name/icon/memberCount reflect server state, not stale
+            // /me/servers row.
+            registerVeilGuild(summary);
             attachServer(summary, channels, syntheticGuildId);
 
-            // Fetch + dispatch members so the right rail renders. Backend
-            // gates `/server/{id}/members` on server membership, so a
-            // non-member pubkey can't pull this list. Failure is non-fatal
-            // — the channel view still works without a populated rail.
             try {
                 const members = await listServerMembers(serverId);
-                dispatchMemberChunk(syntheticGuildId, members);
+                setVeilGuildMembers(syntheticGuildId, members);
             } catch (err) {
                 console.warn("[VeilFlux] failed to load members for guild", syntheticGuildId, err);
             }
@@ -192,14 +157,15 @@ export async function ensureGuildDetail(serverId: number, syntheticGuildId: stri
 }
 
 /**
- * Reset Flux state for every Veil guild we registered. Called on plugin
- * stop so disabling VeilFlux leaves Discord state in the same shape it
- * had on launch.
+ * Reset every Veil guild we registered. Store patches stay installed
+ * (they're idempotent and the empty data map makes them no-ops); the
+ * actual restore of original methods happens via removeStorePatches in
+ * the plugin lifecycle.
  */
 export function uninstallAll(): void {
     detachAllSockets();
     for (const id of Array.from(installedGuildIds)) {
-        dispatchGuildDelete(id);
+        unregisterVeilGuild(id);
     }
     installedGuildIds.clear();
     installedChannelsByGuild.clear();

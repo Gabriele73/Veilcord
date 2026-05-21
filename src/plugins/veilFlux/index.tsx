@@ -17,6 +17,7 @@ import { installAvatarPatch, removeAvatarPatch } from "./avatarPatch";
 import { installFetchSuppressor, removeFetchSuppressor } from "./fetchSuppressor";
 import { installMessageInterceptor, removeMessageInterceptor } from "./messageInterceptor";
 import { installSendInterceptor, removeSendInterceptor } from "./sendInterceptor";
+import { installStorePatches, removeStorePatches } from "./storePatches";
 import { refreshMyServers } from "./stores/veilGuildStore";
 
 const WrappedVeilGuildList = ErrorBoundary.wrap(VeilGuildList, { noop: true });
@@ -57,6 +58,7 @@ export default definePlugin({
 
     start() {
         installFetchSuppressor();
+        installStorePatches();
         installAvatarPatch();
         installMessageInterceptor();
         installSendInterceptor();
@@ -69,6 +71,7 @@ export default definePlugin({
         removeSendInterceptor();
         removeMessageInterceptor();
         removeAvatarPatch();
+        removeStorePatches();
         removeFetchSuppressor();
         uninstallAll();
     }
