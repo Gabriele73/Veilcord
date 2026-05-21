@@ -38,7 +38,16 @@ const installedChannelsByGuild = new Map<string, Set<string>>();
 const detailLoadInFlight = new Map<string, Promise<void>>();
 
 function dispatchGuildCreate(payload: any) {
-    FluxDispatcher.dispatch({ type: "GUILD_CREATE", guild: payload });
+    // Modern Discord stores chain off GUILD_CREATE — GuildStore,
+    // GuildRoleStore, ReadStateStore, ChannelStore, and a dozen others.
+    // A single store throwing on a missing field aborts the rest of the
+    // chain via the dispatcher. We wrap so a single store crash doesn't
+    // leave half-installed state.
+    try {
+        FluxDispatcher.dispatch({ type: "GUILD_CREATE", guild: payload });
+    } catch (err) {
+        console.warn("[VeilFlux] GUILD_CREATE dispatch threw", err);
+    }
 }
 
 function dispatchSelfMember(syntheticGuildId: string) {

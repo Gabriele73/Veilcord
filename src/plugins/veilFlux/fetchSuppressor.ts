@@ -81,11 +81,13 @@ export function installFetchSuppressor(): void {
     originalXhrOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function patchedOpen(this: XMLHttpRequest, method: string, url: string, ...rest: any[]) {
         if (typeof url === "string" && shouldSuppress(url)) {
-            // Route to a harmless data URI so the XHR resolves with an
-            // empty 200. We can't synthesize a full XHR response without
-            // breaking type contracts, so this is the cleanest path.
+            // Most Discord API endpoints that fire on guild/channel
+            // selection (members, integrations, stage instances) return
+            // arrays. `[]` is the safest empty response — handlers that
+            // do `body.forEach(...)` accept it; handlers that probe
+            // `.length` or destructure also accept it.
             void method;
-            return originalXhrOpen!.call(this, "GET", "data:application/json,%7B%7D", ...rest);
+            return originalXhrOpen!.call(this, "GET", "data:application/json,%5B%5D", ...rest);
         }
         return originalXhrOpen!.call(this, method, url, ...rest);
     } as typeof XMLHttpRequest.prototype.open;

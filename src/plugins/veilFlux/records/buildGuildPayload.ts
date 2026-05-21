@@ -148,6 +148,12 @@ export function buildGuildPayload(
         roles: { writes: [everyoneRole], deletes: [] },
         emojis: [],
         stickers: [],
+        // ReadStateStore_GUILD_CREATE iterates `read_state.entries`; a
+        // missing read_state crashes with "forEach undefined" and aborts
+        // the whole GUILD_CREATE chain (no channels, no members visible).
+        read_state: { entries: [], partial: false, version: 1 },
+        unread_messages_settings: { flags: 0 },
+        notifications_settings: { flags: 0 },
         joined_at: joinedAtFromServerId(summary.id),
         large: false,
         lazy: true,
