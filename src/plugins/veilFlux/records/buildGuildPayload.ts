@@ -140,12 +140,12 @@ export function buildGuildPayload(
         ...properties,
         properties,
         // Modern Discord's GuildRoleStore_GUILD_CREATE feeds `guild.roles`
-        // straight into its differential apply path, which iterates a
-        // `.deletes` field on the input. A bare array crashes with
-        // "t.deletes is not iterable"; wrapping in the diff-payload shape
-        // (an array of new roles + an empty deletes list) satisfies the
-        // handler while still presenting one @everyone role.
-        roles: { roles: [everyoneRole], deletes: [] },
+        // straight into its differential apply path, which iterates
+        // `.writes` (additions / updates) and `.deletes` (removed ids) on
+        // the input. A bare array crashes with "t.writes is not iterable";
+        // wrapping in the diff-payload shape satisfies the handler while
+        // still presenting one @everyone role.
+        roles: { writes: [everyoneRole], deletes: [] },
         emojis: [],
         stickers: [],
         joined_at: joinedAtFromServerId(summary.id),
