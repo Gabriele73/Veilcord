@@ -13,6 +13,7 @@ import definePlugin from "@utils/types";
 import { showToast, Toasts, useEffect, useState } from "@webpack/common";
 
 import { KeyGlyph } from "./KeyGlyph";
+import { VeilProfileSection } from "./VeilProfileSection";
 
 interface BindingsState {
     loading: boolean;
@@ -174,9 +175,19 @@ const profilePubkeysComponent = ErrorBoundary.wrap(
     { noop: true }
 );
 
+const profileBundleComponent = ErrorBoundary.wrap(
+    (props: { userId: string; }) => (
+        <>
+            <VeilProfileSection userId={props.userId} />
+            <ProfilePubkeysSection userId={props.userId} />
+        </>
+    ),
+    { noop: true }
+);
+
 export default definePlugin({
     name: "VeilPubkeyProfile",
-    description: "Show a user's officially linked Veil public keys on their Discord profile popout, full profile modal, and DM sidebar.",
+    description: "Show a user's Veil profile and officially linked Veil public keys on their Discord profile popout, full profile modal, and DM sidebar.",
     authors: [Devs.gabriele],
     dependencies: ["VeilCrypto"],
     required: true,
@@ -198,24 +209,25 @@ export default definePlugin({
             find: "#{intl::PREMIUM_GIFTING_BUTTON}),action:",
             replacement: {
                 match: /#{intl::USER_PROFILE_MEMBER_SINCE}\),.{0,100}userId:(\i\.id)}\)}\)/,
-                replace: "$&,$self.profilePubkeysComponent({userId:$1})"
+                replace: "$&,$self.profileBundleComponent({userId:$1})"
             }
         },
         {
             find: ",applicationRoleConnection:",
             replacement: {
                 match: /#{intl::USER_PROFILE_MEMBER_SINCE}\),.{0,100}userId:(\i\.id),.{0,100}}\)}\),/,
-                replace: "$&$self.profilePubkeysComponent({userId:$1}),"
+                replace: "$&$self.profileBundleComponent({userId:$1}),"
             }
         },
         {
             find: ".MODAL_V2,onClose:",
             replacement: {
                 match: /#{intl::USER_PROFILE_MEMBER_SINCE}\),.{0,100}userId:(\i\.id),.{0,100}}\)}\),/,
-                replace: "$&$self.profilePubkeysComponent({userId:$1}),"
+                replace: "$&$self.profileBundleComponent({userId:$1}),"
             }
         }
     ],
 
-    profilePubkeysComponent
+    profilePubkeysComponent,
+    profileBundleComponent
 });

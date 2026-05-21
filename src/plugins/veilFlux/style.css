@@ -1,0 +1,240 @@
+/*
+ * Veil — server sidebar tiles and server-detail modal. Tokens pair with
+ * explicit hex fallbacks per the CLAUDE.md UI-contrast rule so icons and
+ * text never collapse against parent surfaces on builds where Discord
+ * tokens don't resolve.
+ */
+
+/* ===== Sidebar stack injected via ServerListAPI (Above) ===== */
+
+.vc-veil-guild-stack {
+    --veil-pill: var(--white-500, #ffffff);
+    --veil-icon-bg: var(--background-tertiary, #1e1f22);
+    --veil-icon-fg: var(--header-primary, #f2f3f5);
+    --veil-section-label: var(--channels-default, #949ba4);
+    --veil-divider: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    --veil-accent: var(--brand-500, #5865f2);
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0 8px;
+}
+
+.vc-veil-guild-section-label {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--veil-section-label);
+    text-transform: uppercase;
+    padding: 0 6px;
+    user-select: none;
+}
+
+.vc-veil-guild-divider {
+    width: 32px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--veil-divider);
+    margin: 4px 0 2px;
+}
+
+/* Discord guild tiles are 48x48 with a 12px notification pill on the left;
+   mimic the layout so Veil tiles line up perfectly with neighbouring real
+   Discord guild icons. */
+.vc-veil-guild-tile {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    cursor: pointer;
+    outline: none;
+}
+
+.vc-veil-guild-tile:focus-visible .vc-veil-guild-icon {
+    box-shadow: 0 0 0 2px var(--veil-accent);
+}
+
+.vc-veil-guild-pill {
+    position: absolute;
+    left: -16px;
+    top: 50%;
+    width: 4px;
+    height: 8px;
+    border-radius: 0 4px 4px 0;
+    background: var(--veil-pill);
+    transform: translateY(-50%) scaleY(0);
+    transform-origin: center;
+    transition: transform 120ms ease, height 120ms ease;
+    pointer-events: none;
+}
+
+.vc-veil-guild-tile:hover .vc-veil-guild-pill {
+    transform: translateY(-50%) scaleY(1);
+    height: 20px;
+}
+
+.vc-veil-guild-tile--selected .vc-veil-guild-pill {
+    transform: translateY(-50%) scaleY(1);
+    height: 40px;
+}
+
+.vc-veil-guild-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 24px;
+    background: var(--veil-icon-bg);
+    color: var(--veil-icon-fg);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-radius 120ms ease, background-color 120ms ease;
+    user-select: none;
+}
+
+.vc-veil-guild-tile:hover .vc-veil-guild-icon,
+.vc-veil-guild-tile--selected .vc-veil-guild-icon {
+    border-radius: 16px;
+    background: var(--veil-accent);
+}
+
+.vc-veil-guild-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* Initials sit behind the image; if the image fails to load (hidden via
+   onError) the initials show through. Keep them visible so the tile is
+   never blank. */
+.vc-veil-guild-icon img + .vc-veil-guild-initials {
+    display: none;
+}
+
+.vc-veil-guild-initials {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--veil-icon-fg, #f2f3f5);
+}
+
+/* ===== Server-detail modal ===== */
+
+.vc-veil-server-modal {
+    --veil-modal-bg: var(--background-primary, #313338);
+    --veil-modal-text: var(--text-normal, #dbdee1);
+    --veil-modal-text-strong: var(--header-primary, #f2f3f5);
+    --veil-modal-text-muted: var(--text-muted, #949ba4);
+    --veil-modal-card: var(--background-secondary, #2b2d31);
+    --veil-modal-border: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    --veil-modal-accent: var(--brand-500, #5865f2);
+
+    color: var(--veil-modal-text);
+}
+
+.vc-veil-server-modal-title {
+    color: var(--veil-modal-text-strong);
+    margin: 0;
+}
+
+.vc-veil-server-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px 0;
+}
+
+.vc-veil-server-loading,
+.vc-veil-server-error {
+    padding: 24px 0;
+    text-align: center;
+    color: var(--veil-modal-text-muted, #949ba4);
+}
+
+.vc-veil-server-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.vc-veil-server-name {
+    color: var(--veil-modal-text-strong);
+    margin: 0;
+}
+
+.vc-veil-server-desc {
+    color: var(--veil-modal-text);
+}
+
+.vc-veil-server-meta {
+    color: var(--veil-modal-text-muted, #949ba4);
+    font-size: 12px;
+}
+
+.vc-veil-server-section {
+    background: var(--veil-modal-card);
+    border: 1px solid var(--veil-modal-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+}
+
+.vc-veil-server-channels {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.vc-veil-server-channel {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--veil-modal-text);
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.vc-veil-server-channel:hover {
+    background: var(--background-modifier-hover, rgba(78, 80, 88, 0.25));
+}
+
+.vc-veil-server-channel--category {
+    color: var(--veil-modal-text-muted, #949ba4);
+    text-transform: uppercase;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin-top: 8px;
+}
+
+.vc-veil-server-channel-prefix {
+    color: var(--veil-modal-text-muted, #949ba4);
+    font-weight: 600;
+    width: 12px;
+    text-align: center;
+}
+
+.vc-veil-server-channel-name {
+    color: var(--veil-modal-text-strong);
+    font-weight: 500;
+}
+
+.vc-veil-server-channel-topic {
+    color: var(--veil-modal-text-muted, #949ba4);
+    font-size: 12px;
+    margin-left: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.vc-veil-server-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--veil-modal-border);
+}

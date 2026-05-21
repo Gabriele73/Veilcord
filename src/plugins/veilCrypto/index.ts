@@ -15,6 +15,16 @@ import { cryptoService, CryptoService } from "./service";
 export { cryptoService, CryptoService } from "./service";
 export type { VeilE2eContext } from "./service";
 export { veilApiBase } from "./settings";
+export {
+    veilApi,
+    signedBodyRequest,
+    signedHeaderRequest,
+    publicGet,
+    VeilApiError
+} from "./veilApi";
+export type { VeilFetchOptions } from "./veilApi";
+export { VeilServerSocket } from "./veilWs";
+export type { VeilWsEvent, VeilWsListener } from "./veilWs";
 export * as VeilCryptoUtils from "./utils";
 export * as VeilEd25519 from "./ed25519";
 export * as VeilSignedBody from "./signedBody";

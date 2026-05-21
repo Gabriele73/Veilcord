@@ -156,3 +156,135 @@
     color: var(--veil-pkp-text-muted);
     font-size: 12px;
 }
+
+/* ===== Veil profile section (sibling of the keys section) ===== */
+
+.vc-veil-profile-section {
+    --veil-profile-bg: var(--background-secondary, #2b2d31);
+    --veil-profile-card: var(--background-tertiary, #1e1f22);
+    --veil-profile-border: var(--background-modifier-accent, rgba(255, 255, 255, 0.08));
+    --veil-profile-text: var(--text-normal, #dbdee1);
+    --veil-profile-text-strong: var(--header-primary, #f2f3f5);
+    --veil-profile-text-muted: var(--text-muted, #949ba4);
+    --veil-profile-accent: var(--brand-500, #5865f2);
+
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--veil-profile-bg);
+    border: 1px solid var(--veil-profile-border);
+    color: var(--veil-profile-text);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.vc-veil-profile-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.vc-veil-profile-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--veil-profile-text-strong);
+}
+
+.vc-veil-profile-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.vc-veil-profile-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.vc-veil-profile-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: var(--veil-profile-card);
+}
+
+.vc-veil-profile-name-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.vc-veil-profile-name {
+    color: var(--veil-profile-text-strong);
+    font-weight: 600;
+    font-size: 14px;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vc-veil-profile-pubkey {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--veil-profile-card);
+    border: 1px solid var(--veil-profile-border);
+    color: var(--veil-profile-text-strong);
+    font-family: var(--font-code, monospace);
+    font-size: 11px;
+    line-height: 1.2;
+    cursor: pointer;
+    user-select: text;
+    align-self: flex-start;
+    transition: border-color 120ms ease, color 120ms ease;
+}
+
+.vc-veil-profile-pubkey:hover {
+    border-color: rgba(88, 101, 242, 0.55);
+    color: var(--veil-profile-text-strong);
+}
+
+.vc-veil-profile-pubkey:focus-visible {
+    outline: 2px solid var(--veil-profile-accent, #5865f2);
+    outline-offset: 2px;
+}
+
+.vc-veil-profile-desc {
+    color: var(--veil-profile-text);
+    margin: 0;
+    font-size: 12.5px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.vc-veil-profile-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--veil-profile-text-muted);
+    font-size: 12px;
+}
+
+.vc-veil-profile-badges {
+    color: var(--veil-profile-text-muted);
+}
+
+.vc-veil-profile-link {
+    color: var(--veil-profile-accent, #5865f2);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.vc-veil-profile-link:hover {
+    text-decoration: underline;
+}
