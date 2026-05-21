@@ -118,6 +118,8 @@ function buildGuildRecordObject(summary: VeilServerSummary, syntheticId: string,
         // Methods Discord's components occasionally call on Guild records.
         // Stub each to a sensible default for the synthetic guild.
         getEveryoneRoleId: () => syntheticId,
+        getEveryoneRole: () => everyoneRole,
+        getRole: (roleId: string) => roleId === syntheticId ? everyoneRole : null,
         getApplicationId: () => null,
         getMaxEmojiSlots: () => 50,
         getMaxRoleSubscriptionEmojiSlots: () => 0,
