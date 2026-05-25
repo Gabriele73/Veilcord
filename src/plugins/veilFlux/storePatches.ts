@@ -459,7 +459,7 @@ export function installStorePatches(): void {
     // above, so a zero-perm guild role-mask is fine.
     patch(PermissionStore as any, "getGuildPermissions", (orig, context: any) => {
         const id = typeof context === "string" ? context : context?.id ?? context?.guildId ?? context?.guild_id;
-        if (isVeilGuildId(id)) return 0n;
+        if (isVeilGuildId(id)) return 0;
         return orig(context);
     });
 
@@ -484,7 +484,7 @@ export function installStorePatches(): void {
                 canManageThreads: false,
                 canModerateMembers: false,
                 canMentionEveryone: false,
-                permissions: 0n
+                permissions: 0
             };
         }
         return orig(guild);
@@ -492,14 +492,14 @@ export function installStorePatches(): void {
 
     patch(PermissionStore as any, "computeBasePermissions", (orig, ...args: any[]) => {
         const id = typeof args[0] === "string" ? args[0] : args[0]?.id ?? args[1]?.id;
-        if (isVeilGuildId(id)) return 0n;
+        if (isVeilGuildId(id)) return 0;
         return orig(...args);
     });
 
     patch(PermissionStore as any, "computePermissions", (orig, context: any) => {
         const gid = context?.guild?.id ?? context?.guildId ?? context?.guild_id;
         const cid = context?.channel?.id ?? context?.channelId ?? context?.channel_id;
-        if (isVeilGuildId(gid) || isVeilChannelId(cid)) return 0n;
+        if (isVeilGuildId(gid) || isVeilChannelId(cid)) return 0;
         return orig(context);
     });
 
