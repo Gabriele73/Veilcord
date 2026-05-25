@@ -17,6 +17,7 @@ import {
 import type { VeilMember } from "./api/members";
 import type { VeilChannelRecord, VeilServerSummary } from "./api/servers";
 import { isVeilChannelId, isVeilGuildId, registerEntity } from "./idMap";
+import { veilPubkeyToSyntheticUid } from "./messages/buildMessagePayload";
 
 /**
  * Store-level shim layer for Veil guilds. Replaces the Phase 2 approach
@@ -55,14 +56,12 @@ function buildEveryoneRole(syntheticGuildId: string): any {
     return {
         id: syntheticGuildId,
         name: "@everyone",
-        // Permissions deliberately "0" not ALL_PERMS. Discord parses this
-        // string to a BigInt. Some Discord (and Vencord plugin) code paths
-        // bitwise-op the role permission with a Number-typed flag, which
-        // crashes ("Cannot mix BigInt and other types") when the role
-        // carries a non-zero BigInt. The synthetic guild record pins
-        // ownerId to the current user so Discord's owner-shortcut grants
-        // every permission without ever touching role.permissions.
-        permissions: "0",
+        // Discord normally parses role.permissions from a string to BigInt
+        // on GUILD_CREATE. We bypass GUILD_CREATE (store-patches path),
+        // so we must hand Discord's internal computeBasePermissions a
+        // BigInt directly. A string here makes `acc | role.permissions`
+        // throw "Cannot mix BigInt and other types".
+        permissions: 0n,
         position: 0,
         color: 0,
         hoist: false,
@@ -208,6 +207,31 @@ export function setVeilGuildMembers(syntheticGuildId: string, members: VeilMembe
     data.members = members;
 }
 
+function findVeilMemberByUserId(syntheticGuildId: string, userId: string): VeilMember | null {
+    const data = guildDataMap.get(syntheticGuildId);
+    if (!data) return null;
+    return data.members.find(member => veilPubkeyToSyntheticUid(member.pubkey) === userId) ?? null;
+}
+
+function buildVeilGuildMemberRecord(syntheticGuildId: string, member: VeilMember): any {
+    return {
+        userId: veilPubkeyToSyntheticUid(member.pubkey),
+        guildId: syntheticGuildId,
+        nick: member.serverNickname || null,
+        roles: [],
+        joinedAt: new Date(Number(member.joinedAt) || Date.now()).toISOString(),
+        deaf: false,
+        mute: false,
+        pending: false,
+        flags: 0,
+        avatar: null,
+        premiumSince: null,
+        communicationDisabledUntil: null,
+        veilPubkey: (member.pubkey || "").toLowerCase(),
+        veilRoles: Number(member.roles) || 0
+    };
+}
+
 const patchedTargets: Array<{ target: any; key: string; original: any; }> = [];
 let installed = false;
 
@@ -293,45 +317,80 @@ export function installStorePatches(): void {
         return orig(guildId);
     });
 
+    patch(GuildChannelStore as any, "getSelectableChannelIds", (orig, guildId: string) => {
+        if (isVeilGuildId(guildId)) {
+            const data = guildDataMap.get(guildId);
+            if (!data) return [];
+            return Array.from(data.channelRecords.values())
+                .filter(c => c.type === 0)
+                .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+                .map(c => c.id);
+        }
+        return orig(guildId);
+    });
+
     // ---- GuildMemberStore ----
     patch(GuildMemberStore as any, "getMember", (orig, guildId: string, userId: string) => {
         if (isVeilGuildId(guildId)) {
-            const self = UserStore.getCurrentUser?.();
-            if (userId === self?.id) {
-                return {
-                    userId,
-                    guildId,
-                    nick: null,
-                    roles: [],
-                    joinedAt: new Date().toISOString(),
-                    deaf: false,
-                    mute: false,
-                    pending: false,
-                    flags: 0,
-                    avatar: null,
-                    premiumSince: null,
-                    communicationDisabledUntil: null
-                };
-            }
-            return null;
+            const member = findVeilMemberByUserId(guildId, userId);
+            return member ? buildVeilGuildMemberRecord(guildId, member) : null;
         }
         return orig(guildId, userId);
     });
 
-    patch(GuildMemberStore as any, "isMember", (orig, guildId: string, userId: string) => {
+    patch(GuildMemberStore as any, "getSelfMember", (orig, guildId: string) => {
         if (isVeilGuildId(guildId)) {
             const self = UserStore.getCurrentUser?.();
-            return userId === self?.id;
+            if (!self) return null;
+            const member = findVeilMemberByUserId(guildId, self.id);
+            return member ? buildVeilGuildMemberRecord(guildId, member) : null;
+        }
+        return orig(guildId);
+    });
+
+    patch(GuildMemberStore as any, "getSelfMemberJoinedAt", (orig, guildId: string) => {
+        if (isVeilGuildId(guildId)) {
+            const self = (GuildMemberStore as any).getSelfMember?.(guildId);
+            const raw = self?.joinedAt;
+            return raw ? new Date(raw) : new Date();
+        }
+        return orig(guildId);
+    });
+
+    patch(GuildMemberStore as any, "isMember", (orig, guildId: string, userId: string) => {
+        if (isVeilGuildId(guildId)) {
+            return findVeilMemberByUserId(guildId, userId) != null;
         }
         return orig(guildId, userId);
     });
 
     patch(GuildMemberStore as any, "getMemberIds", (orig, guildId: string) => {
         if (isVeilGuildId(guildId)) {
-            const self = UserStore.getCurrentUser?.();
-            return self ? [self.id] : [];
+            const data = guildDataMap.get(guildId);
+            if (!data) return [];
+            return data.members.map(member => veilPubkeyToSyntheticUid(member.pubkey));
         }
         return orig(guildId);
+    });
+
+    patch(GuildMemberStore as any, "memberOf", (orig, userId: string) => {
+        const veilGuildIds = Array.from(guildDataMap.entries())
+            .filter(([, data]) => data.members.some(member => veilPubkeyToSyntheticUid(member.pubkey) === userId))
+            .map(([guildId]) => guildId);
+        if (veilGuildIds.length) {
+            return veilGuildIds;
+        }
+        return orig(userId);
+    });
+
+    patch(GuildMemberStore as any, "isCurrentUserGuest", (orig, guildId: string) => {
+        if (isVeilGuildId(guildId)) return false;
+        return orig(guildId);
+    });
+
+    patch(GuildMemberStore as any, "isGuestOrLurker", (orig, guildId: string, userId: string) => {
+        if (isVeilGuildId(guildId)) return false;
+        return orig(guildId, userId);
     });
 
     // ---- GuildRoleStore ----
@@ -389,7 +448,7 @@ export function installStorePatches(): void {
             return {
                 id,
                 name: "@everyone",
-                permissions: "0",
+                permissions: 0n,
                 position: 0,
                 color: 0,
                 hoist: false,
@@ -444,6 +503,27 @@ export function installStorePatches(): void {
     patch(PermissionStore as any, "canAccessGuild", (orig, guild: any) => {
         if (isVeilGuildId(guild?.id)) return true;
         return orig(guild);
+    });
+
+    patch(PermissionStore as any, "canBasicChannel", (orig, _perm: any, channel: any, guildId?: string) => {
+        const cid = channel?.id ?? channel?.channel_id ?? channel?.channelId;
+        const gid = guildId ?? channel?.guild_id ?? channel?.guildId ?? channel?.guild?.id;
+        if (isVeilChannelId(cid) || isVeilGuildId(gid)) return true;
+        return orig(_perm, channel, guildId);
+    });
+
+    patch(PermissionStore as any, "canViewChannel", (orig, channel: any, guildId?: string) => {
+        const cid = channel?.id ?? channel?.channel_id ?? channel?.channelId;
+        const gid = guildId ?? channel?.guild_id ?? channel?.guildId ?? channel?.guild?.id;
+        if (isVeilChannelId(cid) || isVeilGuildId(gid)) return true;
+        return orig(channel, guildId);
+    });
+
+    patch(PermissionStore as any, "canWithPartialContext", (orig, context: any) => {
+        const gid = context?.guild?.id ?? context?.guildId ?? context?.guild_id;
+        const cid = context?.channel?.id ?? context?.channelId ?? context?.channel_id;
+        if (isVeilGuildId(gid) || isVeilChannelId(cid)) return true;
+        return orig(context);
     });
 
     // Native Discord's getGuildPermissions hits the owner-shortcut for our
@@ -503,6 +583,20 @@ export function installStorePatches(): void {
         return orig(context);
     });
 
+    patch(PermissionStore as any, "computeBasicPermissions", (orig, channel: any) => {
+        const cid = channel?.id ?? channel?.channel_id ?? channel?.channelId;
+        const gid = channel?.guild_id ?? channel?.guildId ?? channel?.guild?.id;
+        if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0;
+        return orig(channel);
+    });
+
+    patch(PermissionStore as any, "getChannelPermissions", (orig, channel: any) => {
+        const cid = channel?.id ?? channel?.channel_id ?? channel?.channelId;
+        const gid = channel?.guild_id ?? channel?.guildId ?? channel?.guild?.id;
+        if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0;
+        return orig(channel);
+    });
+
     // ---- ChannelStore safety net ----
     // CHANNEL_CREATE dispatches still drive ChannelStore for veil channels;
     // this fallback covers the edge case where a channel is queried before
@@ -558,10 +652,14 @@ function instrumentVeilCalls(name: string, store: any) {
         const orig = fn.bind(store);
         const wrapper = function (this: any, ...args: any[]) {
             const result = orig(...args);
-            if (args.some(looksVeil)) {
+            const hasVeilArgs = args.some(looksVeil);
+            if (hasVeilArgs) {
                 try {
                     console.warn(`[VeilFlux/trace] ${name}.${key}`, args, "→", result);
                 } catch { /* ignore */ }
+            }
+            if (hasVeilArgs && name === "PermissionStore" && typeof result === "bigint") {
+                return 0;
             }
             return result;
         };
