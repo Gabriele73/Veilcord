@@ -343,6 +343,32 @@ export function installStorePatches(): void {
         return orig(guildId);
     });
 
+    // Discord's internal computeBasePermissions / computePermissions read
+    // the raw role map via getUnsafeMutableRoles(guildId) (closure-captured,
+    // so our getRoles patch doesn't intercept). Without this patch the
+    // synthetic guild's role map is the empty {} Discord defaulted to,
+    // `roles[guild.id]` is undefined, and `undefined.permissions | 0n`
+    // crashes with "Cannot mix BigInt and other types".
+    patch(GuildRoleStore as any, "getUnsafeMutableRoles", (orig, guildId: string) => {
+        if (isVeilGuildId(guildId)) {
+            const data = guildDataMap.get(guildId);
+            return data ? { [data.syntheticId]: data.everyoneRole } : {};
+        }
+        return orig(guildId);
+    });
+
+    // Same family. Some Discord builds also ship getMutableAllGuildsRoles()
+    // (no args, returns the full {guildId: {roleId: role}} map). If the
+    // method exists, splice the veil entries in.
+    patch(GuildRoleStore as any, "getMutableAllGuildsRoles", (orig) => {
+        const real = typeof orig === "function" ? orig() : {};
+        const merged = { ...(real || {}) };
+        for (const [gid, data] of guildDataMap) {
+            merged[gid] = { [data.syntheticId]: data.everyoneRole };
+        }
+        return merged;
+    });
+
     patch(GuildRoleStore as any, "getRole", (orig, guildId: string, roleId: string) => {
         if (isVeilGuildId(guildId)) {
             const data = guildDataMap.get(guildId);
