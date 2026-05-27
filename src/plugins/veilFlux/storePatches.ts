@@ -402,6 +402,18 @@ export function installStorePatches(): void {
         return orig(guildId);
     });
 
+    // Snapshot variant used by some chat-shell selectors. Native returns
+    // an empty {} for the synthetic guild, which leaves downstream
+    // permission accumulators with a BigInt 0n that gets ANDed against a
+    // Number flag elsewhere -> "Cannot mix BigInt and other types".
+    patch(GuildRoleStore as any, "getRolesSnapshot", (orig, guildId: string) => {
+        if (isVeilGuildId(guildId)) {
+            const data = guildDataMap.get(guildId);
+            return data ? { [data.syntheticId]: data.everyoneRole } : {};
+        }
+        return orig(guildId);
+    });
+
     // Discord's internal computeBasePermissions / computePermissions read
     // the raw role map via getUnsafeMutableRoles(guildId) (closure-captured,
     // so our getRoles patch doesn't intercept). Without this patch the
