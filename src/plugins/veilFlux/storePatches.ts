@@ -437,7 +437,8 @@ export function installStorePatches(): void {
     });
 
     patch(GuildRoleStore as any, "getEveryoneRole", (orig, guildIdOrGuild: any) => {
-        const id = typeof guildIdOrGuild === "string" ? guildIdOrGuild : guildIdOrGuild?.id;
+        if (guildIdOrGuild == null) return null;
+        const id = typeof guildIdOrGuild === "string" ? guildIdOrGuild : guildIdOrGuild.id;
         if (isVeilGuildId(id)) {
             const data = guildDataMap.get(id);
             if (data) return data.everyoneRole;
@@ -495,26 +496,30 @@ export function installStorePatches(): void {
     // "Cannot mix BigInt and other types, use explicit conversions" when
     // they ANDed the result against a Number-typed permission bit.
     patch(PermissionStore as any, "can", (orig, _perm: any, context: any) => {
-        const id = context?.guild_id ?? context?.guildId ?? context?.id;
+        if (context == null) return false;
+        const id = context.guild_id ?? context.guildId ?? context.id;
         if (isVeilGuildId(id) || isVeilChannelId(id)) return true;
         return orig(_perm, context);
     });
 
     patch(PermissionStore as any, "canAccessGuild", (orig, guild: any) => {
-        if (isVeilGuildId(guild?.id)) return true;
+        if (guild == null) return false;
+        if (isVeilGuildId(guild.id)) return true;
         return orig(guild);
     });
 
     patch(PermissionStore as any, "canBasicChannel", (orig, _perm: any, channel: any, guildId?: string) => {
-        const cid = channel?.id ?? channel?.channel_id ?? channel?.channelId;
-        const gid = guildId ?? channel?.guild_id ?? channel?.guildId ?? channel?.guild?.id;
+        if (channel == null) return false;
+        const cid = channel.id ?? channel.channel_id ?? channel.channelId;
+        const gid = guildId ?? channel.guild_id ?? channel.guildId ?? channel.guild?.id;
         if (isVeilChannelId(cid) || isVeilGuildId(gid)) return true;
         return orig(_perm, channel, guildId);
     });
 
     patch(PermissionStore as any, "canViewChannel", (orig, channel: any, guildId?: string) => {
-        const cid = channel?.id ?? channel?.channel_id ?? channel?.channelId;
-        const gid = guildId ?? channel?.guild_id ?? channel?.guildId ?? channel?.guild?.id;
+        if (channel == null) return false;
+        const cid = channel.id ?? channel.channel_id ?? channel.channelId;
+        const gid = guildId ?? channel.guild_id ?? channel.guildId ?? channel.guild?.id;
         if (isVeilChannelId(cid) || isVeilGuildId(gid)) return true;
         return orig(channel, guildId);
     });
@@ -539,13 +544,36 @@ export function installStorePatches(): void {
     // veil channels grant their own perms via the boolean `can` patch
     // above, so a zero-perm guild role-mask is fine.
     patch(PermissionStore as any, "getGuildPermissions", (orig, context: any) => {
-        const id = typeof context === "string" ? context : context?.id ?? context?.guildId ?? context?.guild_id;
+        if (context == null) return 0;
+        const id = typeof context === "string" ? context : context.id ?? context.guildId ?? context.guild_id;
         if (isVeilGuildId(id)) return 0;
         return orig(context);
     });
 
     patch(PermissionStore as any, "getGuildPermissionProps", (orig, guild: any) => {
-        const id = typeof guild === "string" ? guild : guild?.id;
+        if (guild == null) {
+            return {
+                canManageGuild: false,
+                canManageRoles: false,
+                canManageChannels: false,
+                canManageEmojisAndStickers: false,
+                canManageEvents: false,
+                canManageWebhooks: false,
+                canKickMembers: false,
+                canBanMembers: false,
+                canCreateInvite: false,
+                canViewAuditLog: false,
+                canViewGuildInsights: false,
+                canChangeNickname: false,
+                canManageNicknames: false,
+                canManageMessages: false,
+                canManageThreads: false,
+                canModerateMembers: false,
+                canMentionEveryone: false,
+                permissions: 0
+            };
+        }
+        const id = typeof guild === "string" ? guild : guild.id;
         if (isVeilGuildId(id)) {
             return {
                 canManageGuild: false,
@@ -572,28 +600,32 @@ export function installStorePatches(): void {
     });
 
     patch(PermissionStore as any, "computeBasePermissions", (orig, ...args: any[]) => {
+        if (args[0] == null) return 0;
         const id = typeof args[0] === "string" ? args[0] : args[0]?.id ?? args[1]?.id;
         if (isVeilGuildId(id)) return 0;
         return orig(...args);
     });
 
     patch(PermissionStore as any, "computePermissions", (orig, context: any) => {
-        const gid = context?.guild?.id ?? context?.guildId ?? context?.guild_id;
-        const cid = context?.channel?.id ?? context?.channelId ?? context?.channel_id;
+        if (context == null) return 0;
+        const gid = context.guild?.id ?? context.guildId ?? context.guild_id;
+        const cid = context.channel?.id ?? context.channelId ?? context.channel_id;
         if (isVeilGuildId(gid) || isVeilChannelId(cid)) return 0;
         return orig(context);
     });
 
     patch(PermissionStore as any, "computeBasicPermissions", (orig, channel: any) => {
-        const cid = channel?.id ?? channel?.channel_id ?? channel?.channelId;
-        const gid = channel?.guild_id ?? channel?.guildId ?? channel?.guild?.id;
+        if (channel == null) return 0;
+        const cid = channel.id ?? channel.channel_id ?? channel.channelId;
+        const gid = channel.guild_id ?? channel.guildId ?? channel.guild?.id;
         if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0;
         return orig(channel);
     });
 
     patch(PermissionStore as any, "getChannelPermissions", (orig, channel: any) => {
-        const cid = channel?.id ?? channel?.channel_id ?? channel?.channelId;
-        const gid = channel?.guild_id ?? channel?.guildId ?? channel?.guild?.id;
+        if (channel == null) return 0;
+        const cid = channel.id ?? channel.channel_id ?? channel.channelId;
+        const gid = channel.guild_id ?? channel.guildId ?? channel.guild?.id;
         if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0;
         return orig(channel);
     });
