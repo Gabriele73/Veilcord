@@ -520,8 +520,9 @@ export function installStorePatches(): void {
     });
 
     patch(PermissionStore as any, "canWithPartialContext", (orig, context: any) => {
-        const gid = context?.guild?.id ?? context?.guildId ?? context?.guild_id;
-        const cid = context?.channel?.id ?? context?.channelId ?? context?.channel_id;
+        if (context == null) return false;
+        const gid = context.guild?.id ?? context.guildId ?? context.guild_id;
+        const cid = context.channel?.id ?? context.channelId ?? context.channel_id;
         if (isVeilGuildId(gid) || isVeilChannelId(cid)) return true;
         return orig(context);
     });
