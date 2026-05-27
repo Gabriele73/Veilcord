@@ -499,13 +499,13 @@ export function installStorePatches(): void {
         if (context == null) return false;
         const id = context.guild_id ?? context.guildId ?? context.id;
         if (isVeilGuildId(id) || isVeilChannelId(id)) return true;
-        return orig(_perm, context);
+        try { return orig(_perm, context); } catch { return false; }
     });
 
     patch(PermissionStore as any, "canAccessGuild", (orig, guild: any) => {
         if (guild == null) return false;
         if (isVeilGuildId(guild.id)) return true;
-        return orig(guild);
+        try { return orig(guild); } catch { return false; }
     });
 
     patch(PermissionStore as any, "canBasicChannel", (orig, _perm: any, channel: any, guildId?: string) => {
@@ -513,7 +513,7 @@ export function installStorePatches(): void {
         const cid = channel.id ?? channel.channel_id ?? channel.channelId;
         const gid = guildId ?? channel.guild_id ?? channel.guildId ?? channel.guild?.id;
         if (isVeilChannelId(cid) || isVeilGuildId(gid)) return true;
-        return orig(_perm, channel, guildId);
+        try { return orig(_perm, channel, guildId); } catch { return false; }
     });
 
     patch(PermissionStore as any, "canViewChannel", (orig, channel: any, guildId?: string) => {
@@ -521,7 +521,7 @@ export function installStorePatches(): void {
         const cid = channel.id ?? channel.channel_id ?? channel.channelId;
         const gid = guildId ?? channel.guild_id ?? channel.guildId ?? channel.guild?.id;
         if (isVeilChannelId(cid) || isVeilGuildId(gid)) return true;
-        return orig(channel, guildId);
+        try { return orig(channel, guildId); } catch { return false; }
     });
 
     patch(PermissionStore as any, "canWithPartialContext", (orig, context: any) => {
@@ -529,7 +529,7 @@ export function installStorePatches(): void {
         const gid = context.guild?.id ?? context.guildId ?? context.guild_id;
         const cid = context.channel?.id ?? context.channelId ?? context.channel_id;
         if (isVeilGuildId(gid) || isVeilChannelId(cid)) return true;
-        return orig(context);
+        try { return orig(context); } catch { return false; }
     });
 
     // Native Discord's getGuildPermissions hits the owner-shortcut for our
@@ -547,7 +547,7 @@ export function installStorePatches(): void {
         if (context == null) return 0;
         const id = typeof context === "string" ? context : context.id ?? context.guildId ?? context.guild_id;
         if (isVeilGuildId(id)) return 0;
-        return orig(context);
+        try { return orig(context); } catch { return 0; }
     });
 
     patch(PermissionStore as any, "getGuildPermissionProps", (orig, guild: any) => {
@@ -603,7 +603,7 @@ export function installStorePatches(): void {
         if (args[0] == null) return 0;
         const id = typeof args[0] === "string" ? args[0] : args[0]?.id ?? args[1]?.id;
         if (isVeilGuildId(id)) return 0;
-        return orig(...args);
+        try { return orig(...args); } catch { return 0; }
     });
 
     patch(PermissionStore as any, "computePermissions", (orig, context: any) => {
@@ -611,7 +611,7 @@ export function installStorePatches(): void {
         const gid = context.guild?.id ?? context.guildId ?? context.guild_id;
         const cid = context.channel?.id ?? context.channelId ?? context.channel_id;
         if (isVeilGuildId(gid) || isVeilChannelId(cid)) return 0;
-        return orig(context);
+        try { return orig(context); } catch { return 0; }
     });
 
     patch(PermissionStore as any, "computeBasicPermissions", (orig, channel: any) => {
@@ -619,7 +619,7 @@ export function installStorePatches(): void {
         const cid = channel.id ?? channel.channel_id ?? channel.channelId;
         const gid = channel.guild_id ?? channel.guildId ?? channel.guild?.id;
         if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0;
-        return orig(channel);
+        try { return orig(channel); } catch { return 0; }
     });
 
     patch(PermissionStore as any, "getChannelPermissions", (orig, channel: any) => {
@@ -627,7 +627,7 @@ export function installStorePatches(): void {
         const cid = channel.id ?? channel.channel_id ?? channel.channelId;
         const gid = channel.guild_id ?? channel.guildId ?? channel.guild?.id;
         if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0;
-        return orig(channel);
+        try { return orig(channel); } catch { return 0; }
     });
 
     // ---- ChannelStore safety net ----
@@ -684,7 +684,12 @@ function instrumentVeilCalls(name: string, store: any) {
         if (patchedTargets.some(e => e.target === store && e.key === key)) continue;
         const orig = fn.bind(store);
         const wrapper = function (this: any, ...args: any[]) {
-            const result = orig(...args);
+            let result: any;
+            try {
+                result = orig(...args);
+            } catch {
+                return undefined;
+            }
             const hasVeilArgs = args.some(looksVeil);
             if (hasVeilArgs) {
                 try {
