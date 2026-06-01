@@ -43,7 +43,10 @@ export class PermissionStore extends FluxStore {
 
     // TODO: finish typing
     computePermissions(channel: PartialChannel, guildId?: string, overwrites?: Record<string, any>, userId?: string): bigint;
-    computeBasicPermissions(channel: PartialChannel): number;
+    // BigInt, like every other permission mask. Discord ANDs the result
+    // against BigInt PermissionsBits, so a Number here would throw
+    // "Cannot mix BigInt and other types" downstream.
+    computeBasicPermissions(channel: PartialChannel): bigint;
 
     getChannelPermissions(channel: PartialChannel): bigint;
     getGuildPermissions(guild: PartialGuild): bigint;

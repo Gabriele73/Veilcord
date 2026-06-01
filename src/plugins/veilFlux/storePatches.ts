@@ -232,6 +232,54 @@ function buildVeilGuildMemberRecord(syntheticGuildId: string, member: VeilMember
     };
 }
 
+/**
+ * Verbose per-call tracing of every veil-id store read. OFF by default:
+ * zero console spam and zero per-call overhead in normal use. Flip to true
+ * only while diagnosing a new synthetic-guild render crash, then ship it
+ * back to false. The PermissionStore safety net runs regardless of this
+ * flag; this only controls the console.warn logging.
+ */
+const TRACE_VEIL_CALLS = false;
+
+/**
+ * Shape Discord's PermissionStore.getGuildPermissionProps returns. Synthetic
+ * guilds deny every management capability (no settings gear, no moderation
+ * UI) and expose the guild record. The field set is the UNION of current and
+ * historical Discord builds so a consumer reading any known key gets `false`,
+ * never `undefined`. `permissions` is a BigInt mask (0n), never Number 0.
+ */
+function denyAllGuildPermissionProps(guild: any): any {
+    return {
+        canManageGuild: false,
+        canManageRoles: false,
+        canManageChannels: false,
+        canManageEmojisAndStickers: false,
+        canManageGuildExpressions: false,
+        canManageEvents: false,
+        canManageWebhooks: false,
+        canKickMembers: false,
+        canBanMembers: false,
+        canManageBans: false,
+        canCreateInvite: false,
+        canViewAuditLog: false,
+        canViewAuditLogV2: false,
+        canViewGuildInsights: false,
+        canViewGuildAnalytics: false,
+        canAccessMembersPage: false,
+        canChangeNickname: false,
+        canManageNicknames: false,
+        canManageMessages: false,
+        canManageThreads: false,
+        canModerateMembers: false,
+        canMentionEveryone: false,
+        isGuildAdmin: false,
+        isOwner: false,
+        isOwnerWithRequiredMfaLevel: false,
+        permissions: 0n,
+        guild: guild ?? null
+    };
+}
+
 const patchedTargets: Array<{ target: any; key: string; original: any; }> = [];
 let installed = false;
 
@@ -556,90 +604,106 @@ export function installStorePatches(): void {
     // veil channels grant their own perms via the boolean `can` patch
     // above, so a zero-perm guild role-mask is fine.
     patch(PermissionStore as any, "getGuildPermissions", (orig, context: any) => {
-        if (context == null) return 0;
+        // Permission masks are BigInt in modern Discord. Consumers do
+        // `getGuildPermissions(x) & PermissionsBits.FOO` where FOO is a
+        // BigInt, so a Number 0 here throws "Cannot mix BigInt and other
+        // types". Return 0n (no perms); veil channel access comes from the
+        // boolean `can*` patches above.
+        if (context == null) return 0n;
         const id = typeof context === "string" ? context : context.id ?? context.guildId ?? context.guild_id;
-        if (isVeilGuildId(id)) return 0;
-        try { return orig(context); } catch { return 0; }
+        if (isVeilGuildId(id)) return 0n;
+        try { return orig(context); } catch { return 0n; }
     });
 
     patch(PermissionStore as any, "getGuildPermissionProps", (orig, guild: any) => {
-        if (guild == null) {
-            return {
-                canManageGuild: false,
-                canManageRoles: false,
-                canManageChannels: false,
-                canManageEmojisAndStickers: false,
-                canManageEvents: false,
-                canManageWebhooks: false,
-                canKickMembers: false,
-                canBanMembers: false,
-                canCreateInvite: false,
-                canViewAuditLog: false,
-                canViewGuildInsights: false,
-                canChangeNickname: false,
-                canManageNicknames: false,
-                canManageMessages: false,
-                canManageThreads: false,
-                canModerateMembers: false,
-                canMentionEveryone: false,
-                permissions: 0
-            };
-        }
+        if (guild == null) return denyAllGuildPermissionProps(null);
         const id = typeof guild === "string" ? guild : guild.id;
         if (isVeilGuildId(id)) {
-            return {
-                canManageGuild: false,
-                canManageRoles: false,
-                canManageChannels: false,
-                canManageEmojisAndStickers: false,
-                canManageEvents: false,
-                canManageWebhooks: false,
-                canKickMembers: false,
-                canBanMembers: false,
-                canCreateInvite: false,
-                canViewAuditLog: false,
-                canViewGuildInsights: false,
-                canChangeNickname: false,
-                canManageNicknames: false,
-                canManageMessages: false,
-                canManageThreads: false,
-                canModerateMembers: false,
-                canMentionEveryone: false,
-                permissions: 0
-            };
+            const data = guildDataMap.get(id);
+            const rec = data?.record ?? (typeof guild === "object" ? guild : null);
+            return denyAllGuildPermissionProps(rec);
         }
         return orig(guild);
     });
 
+    // All four perm-compute methods below return a BigInt mask natively
+    // (computeBasicPermissions is typed `number` in our stale d.ts, but
+    // Discord ANDs it against BigInt PermissionsBits, so it is BigInt too).
+    // Return 0n, never Number 0, or downstream `mask & bigintFlag` throws.
     patch(PermissionStore as any, "computeBasePermissions", (orig, ...args: any[]) => {
-        if (args[0] == null) return 0;
+        if (args[0] == null) return 0n;
         const id = typeof args[0] === "string" ? args[0] : args[0]?.id ?? args[1]?.id;
-        if (isVeilGuildId(id)) return 0;
-        try { return orig(...args); } catch { return 0; }
+        if (isVeilGuildId(id)) return 0n;
+        try { return orig(...args); } catch { return 0n; }
     });
 
     patch(PermissionStore as any, "computePermissions", (orig, context: any) => {
-        if (context == null) return 0;
+        if (context == null) return 0n;
         const gid = context.guild?.id ?? context.guildId ?? context.guild_id;
         const cid = context.channel?.id ?? context.channelId ?? context.channel_id;
-        if (isVeilGuildId(gid) || isVeilChannelId(cid)) return 0;
-        try { return orig(context); } catch { return 0; }
+        if (isVeilGuildId(gid) || isVeilChannelId(cid)) return 0n;
+        try { return orig(context); } catch { return 0n; }
     });
 
     patch(PermissionStore as any, "computeBasicPermissions", (orig, channel: any) => {
-        if (channel == null) return 0;
+        if (channel == null) return 0n;
         const cid = channel.id ?? channel.channel_id ?? channel.channelId;
         const gid = channel.guild_id ?? channel.guildId ?? channel.guild?.id;
-        if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0;
-        try { return orig(channel); } catch { return 0; }
+        if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0n;
+        try { return orig(channel); } catch { return 0n; }
     });
 
     patch(PermissionStore as any, "getChannelPermissions", (orig, channel: any) => {
-        if (channel == null) return 0;
+        if (channel == null) return 0n;
         const cid = channel.id ?? channel.channel_id ?? channel.channelId;
         const gid = channel.guild_id ?? channel.guildId ?? channel.guild?.id;
-        if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0;
-        try { return orig(channel); } catch { return 0; }
+        if (isVeilChannelId(cid) || isVeilGuildId(gid)) return 0n;
+        try { return orig(channel); } catch { return 0n; }
+    });
+
+    // Remaining PermissionStore surface. These return booleans / a Role, not
+    // masks, so they don't crash on the BigInt/Number mix — but their native
+    // impls walk role + member state that doesn't exist for a synthetic
+    // guild. Answer veil ids explicitly (deny management, expose the single
+    // @everyone role) instead of letting native traversal run on partial
+    // state. Real-guild ids fall through untouched.
+    patch(PermissionStore as any, "canManageUser", (orig, _perm: any, _user: any, guild: any) => {
+        const id = typeof guild === "string" ? guild : guild?.id;
+        if (isVeilGuildId(id)) return false;
+        try { return orig(_perm, _user, guild); } catch { return false; }
+    });
+
+    patch(PermissionStore as any, "canAccessGuildSettings", (orig, guild: any) => {
+        const id = typeof guild === "string" ? guild : guild?.id;
+        if (isVeilGuildId(id)) return false;
+        try { return orig(guild); } catch { return false; }
+    });
+
+    patch(PermissionStore as any, "canAccessMemberSafetyPage", (orig, guild: any) => {
+        const id = typeof guild === "string" ? guild : guild?.id;
+        if (isVeilGuildId(id)) return false;
+        try { return orig(guild); } catch { return false; }
+    });
+
+    patch(PermissionStore as any, "canImpersonateRole", (orig, guild: any, role: any) => {
+        const id = typeof guild === "string" ? guild : guild?.id;
+        if (isVeilGuildId(id)) return false;
+        try { return orig(guild, role); } catch { return false; }
+    });
+
+    patch(PermissionStore as any, "getHighestRole", (orig, guild: any) => {
+        const id = typeof guild === "string" ? guild : guild?.id;
+        if (isVeilGuildId(id)) {
+            const data = guildDataMap.get(id);
+            return data?.everyoneRole ?? null;
+        }
+        try { return orig(guild); } catch { return null; }
+    });
+
+    patch(PermissionStore as any, "isRoleHigher", (orig, guild: any, firstRole: any, secondRole: any) => {
+        const id = typeof guild === "string" ? guild : guild?.id;
+        if (isVeilGuildId(id)) return false;
+        try { return orig(guild, firstRole, secondRole); } catch { return false; }
     });
 
     // ---- ChannelStore safety net ----
@@ -657,16 +721,23 @@ export function installStorePatches(): void {
         return real;
     });
 
-    // ---- Diagnostic instrumentation ----
-    // Wrap every method on the perm-related stores so any call with a veil
-    // guild/channel/role id logs "[VeilFlux/trace] StoreName.method veil-id".
-    // Finds the unpatched method that triggers
-    // "Cannot mix BigInt and other types".
-    instrumentVeilCalls("PermissionStore", PermissionStore);
-    instrumentVeilCalls("GuildRoleStore", GuildRoleStore);
-    instrumentVeilCalls("GuildMemberStore", GuildMemberStore);
-    instrumentVeilCalls("GuildChannelStore", GuildChannelStore);
-    instrumentVeilCalls("GuildStore", GuildStore);
+    // ---- Safety net + optional tracing ----
+    // Always-on net for PermissionStore: any method we DIDN'T explicitly
+    // patch above still gets its veil-id BigInt masks coerced to 0n, so a
+    // future Discord build that adds a perm method can't reintroduce the
+    // "Cannot mix BigInt and other types" crash. Real-guild calls pass
+    // through untouched (the net never swallows Discord's own errors).
+    netVeilPermissionStore(PermissionStore);
+
+    // Verbose tracing of the other perm-related stores. Off by default; the
+    // PermissionStore net handles its own logging when TRACE is on, so it is
+    // not listed here.
+    if (TRACE_VEIL_CALLS) {
+        traceVeilStore("GuildRoleStore", GuildRoleStore);
+        traceVeilStore("GuildMemberStore", GuildMemberStore);
+        traceVeilStore("GuildChannelStore", GuildChannelStore);
+        traceVeilStore("GuildStore", GuildStore);
+    }
 }
 
 function looksVeil(v: any): boolean {
@@ -678,7 +749,16 @@ function looksVeil(v: any): boolean {
     return false;
 }
 
-function instrumentVeilCalls(name: string, store: any) {
+/**
+ * Iterate every own/proto method of `store` that we did NOT already patch
+ * explicitly, and replace it with the wrapper `make(key, orig)` returns.
+ * Returning null from `make` leaves the method untouched. Wrapped methods
+ * are recorded so removeStorePatches() restores them exactly.
+ */
+function eachUnpatchedMethod(
+    store: any,
+    make: (key: string, orig: (...a: any[]) => any) => ((...a: any[]) => any) | null
+) {
     if (!store) return;
     const proto = Object.getPrototypeOf(store);
     const keys = new Set<string>([
@@ -691,28 +771,10 @@ function instrumentVeilCalls(name: string, store: any) {
         let fn: any;
         try { fn = store[key]; } catch { continue; }
         if (typeof fn !== "function") continue;
-        // Skip if we already patched it above (those wrappers already log
-        // implicitly by handling the veil path).
         if (patchedTargets.some(e => e.target === store && e.key === key)) continue;
         const orig = fn.bind(store);
-        const wrapper = function (this: any, ...args: any[]) {
-            let result: any;
-            try {
-                result = orig(...args);
-            } catch {
-                return undefined;
-            }
-            const hasVeilArgs = args.some(looksVeil);
-            if (hasVeilArgs) {
-                try {
-                    console.warn(`[VeilFlux/trace] ${name}.${key}`, args, "→", result);
-                } catch { /* ignore */ }
-            }
-            if (hasVeilArgs && name === "PermissionStore" && typeof result === "bigint") {
-                return 0;
-            }
-            return result;
-        };
+        const wrapper = make(key, orig);
+        if (!wrapper) continue;
         try {
             Object.defineProperty(store, key, {
                 value: wrapper,
@@ -723,6 +785,46 @@ function instrumentVeilCalls(name: string, store: any) {
             patchedTargets.push({ target: store, key, original: orig });
         } catch { /* ignore */ }
     }
+}
+
+/**
+ * Always-on safety net for the PermissionStore methods we don't shim by
+ * hand. For veil-id args only: coerce a BigInt mask result to 0n (type
+ * defense for any future perm method) and fall back to 0n if the native
+ * impl throws on synthetic state. Real-guild calls run untouched — we never
+ * hide Discord's own results or errors, the prior bug. Logs only when
+ * TRACE_VEIL_CALLS is on.
+ */
+function netVeilPermissionStore(store: any) {
+    eachUnpatchedMethod(store, (key, orig) => function (this: any, ...args: any[]) {
+        if (!args.some(looksVeil)) return orig(...args);
+        let result: any;
+        try {
+            result = orig(...args);
+        } catch {
+            return 0n;
+        }
+        if (TRACE_VEIL_CALLS) {
+            try { console.warn(`[VeilFlux/trace] PermissionStore.${key}`, args, "→", result); } catch { /* ignore */ }
+        }
+        return typeof result === "bigint" ? 0n : result;
+    });
+}
+
+/**
+ * Debug-only tracer for the non-permission stores. Log-only: never reshapes
+ * results, never swallows errors (a native throw propagates with its real
+ * stack, exactly what you want while diagnosing). Installed only when
+ * TRACE_VEIL_CALLS is on.
+ */
+function traceVeilStore(name: string, store: any) {
+    eachUnpatchedMethod(store, (key, orig) => function (this: any, ...args: any[]) {
+        const result = orig(...args);
+        if (args.some(looksVeil)) {
+            try { console.warn(`[VeilFlux/trace] ${name}.${key}`, args, "→", result); } catch { /* ignore */ }
+        }
+        return result;
+    });
 }
 
 export function removeStorePatches(): void {
