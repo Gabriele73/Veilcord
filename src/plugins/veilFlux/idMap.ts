@@ -90,4 +90,11 @@ export function isVeilRoomId(id: unknown): id is string {
     return typeof id === "string" && id.length === 18 && id.startsWith("97");
 }
 
+// Synthetic user ids derived from Veil pubkeys via veilPubkeyToSyntheticUid.
+// Namespace: "9991" + 14 decimal digits = 18 chars. Distinct from guild ids
+// ("990..." / "991..." / etc.) so fetchSuppressor can return the right shape.
+export function isVeilUserId(id: unknown): id is string {
+    return typeof id === "string" && id.length === 18 && id.startsWith("9991");
+}
+
 export const VEIL_META_GUILD_ID = META_GUILD_ID;

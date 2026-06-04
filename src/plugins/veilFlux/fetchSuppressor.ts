@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { isVeilChannelId, isVeilGuildId } from "./idMap";
+import { isVeilChannelId, isVeilGuildId, isVeilUserId } from "./idMap";
 
 /**
  * Discord runs background fetches on guild / channel selection: lurker
@@ -19,12 +19,8 @@ import { isVeilChannelId, isVeilGuildId } from "./idMap";
  * Discord-host URLs; calls to `api.veil.rip` are passed through
  * untouched so VeilFlux's own signed-envelope requests still work.
  *
- * Gateway WebSocket (client → server) messages are also intercepted:
- *   OP 8  REQUEST_GUILD_MEMBERS   — causes 4004 Unknown Guild for synthetic ids
- *   OP 14 GUILD_SUBSCRIPTION_UPDATE — member-list lazy load; also errors
- * Both are dropped / filtered when they reference a Veil synthetic guild id.
- * Client→server gateway frames are plain JSON (no compression), so string
- * parsing is safe.
+ * Veil user-profile fetches are handled separately: they return `{}` instead
+ * of `[]` so Discord's UserStore doesn't throw on missing object properties.
  */
 
 const DISCORD_HOSTS = ["discord.com", "discordapp.com", "discord.gg"];
@@ -44,12 +40,21 @@ function urlReferencesVeilEntity(url: string): boolean {
     // Extract every 18-digit numeric chunk and test against the
     // synthetic-id classifier. Cheap regex pass; never false-positives on
     // shorter Discord snowflakes (17 digits as of 2026) or longer hashes.
+    // Veil user ids (9991…) are intentionally excluded: they need a
+    // different response shape (see urlReferencesVeilUser below).
     const matches = url.match(/\d{18}/g);
     if (!matches) return false;
     for (const m of matches) {
+        if (isVeilUserId(m)) continue;
         if (isVeilGuildId(m) || isVeilChannelId(m)) return true;
     }
     return false;
+}
+
+function urlReferencesVeilUser(url: string): boolean {
+    const matches = url.match(/\d{18}/g);
+    if (!matches) return false;
+    return matches.some(m => isVeilUserId(m));
 }
 
 function shouldSuppress(url: string): boolean {
@@ -65,38 +70,8 @@ function emptyJsonResponse(status: number): Response {
     });
 }
 
-/**
- * Inspect a client→server WebSocket frame. Returns:
- *   null          — drop the frame entirely
- *   original data — pass through unchanged
- *   new string    — send the rewritten payload (Veil guild_ids filtered out)
- *
- * Only OP 8 (REQUEST_GUILD_MEMBERS) and OP 14 (GUILD_SUBSCRIPTION_UPDATE)
- * are touched. All other opcodes pass through untouched.
- */
-function patchVeilGatewayFrame(data: any): any | null {
-    if (typeof data !== "string") return data;
-    let msg: any;
-    try { msg = JSON.parse(data); } catch { return data; }
-    const op: number = msg?.op;
-    if (op !== 8 && op !== 14) return data;
-    const d = msg?.d;
-    if (!d) return data;
-    // Single guild_id field — drop the whole frame
-    if (d.guild_id && isVeilGuildId(String(d.guild_id))) return null;
-    // guild_ids array — filter out Veil ids, drop if nothing remains
-    if (Array.isArray(d.guild_ids)) {
-        const filtered = d.guild_ids.filter((id: any) => !isVeilGuildId(String(id)));
-        if (filtered.length === 0) return null;
-        if (filtered.length !== d.guild_ids.length)
-            return JSON.stringify({ ...msg, d: { ...d, guild_ids: filtered } });
-    }
-    return data;
-}
-
 let originalFetch: typeof fetch | null = null;
 let originalXhrOpen: ((this: XMLHttpRequest, ...args: any[]) => void) | null = null;
-let originalWsSend: ((data: any) => void) | null = null;
 let installed = false;
 
 export function installFetchSuppressor(): void {
@@ -112,6 +87,15 @@ export function installFetchSuppressor(): void {
                 : (input as Request).url;
         if (shouldSuppress(url)) {
             return Promise.resolve(emptyJsonResponse(200));
+        }
+        // Veil user profile fetches: Discord's UserStore dispatches
+        // USER_PROFILE_FETCH_SUCCESS expecting an object, not an array.
+        // Return {} so handlers don't throw on missing properties.
+        if (isDiscordHost(url) && urlReferencesVeilUser(url)) {
+            return Promise.resolve(new Response("{}", {
+                status: 200,
+                headers: { "Content-Type": "application/json" }
+            }));
         }
         return originalFetch!(input, init);
     } as typeof fetch;
@@ -130,22 +114,14 @@ export function installFetchSuppressor(): void {
         return originalXhrOpen!.call(this, method, url, ...rest);
     } as typeof XMLHttpRequest.prototype.open;
 
-    originalWsSend = WebSocket.prototype.send;
-    WebSocket.prototype.send = function patchedWsSend(this: WebSocket, data: any) {
-        const out = patchVeilGatewayFrame(data);
-        if (out === null) return;
-        return originalWsSend!.call(this, out);
-    };
 }
 
 export function removeFetchSuppressor(): void {
     if (!installed) return;
     if (originalFetch) window.fetch = originalFetch;
     if (originalXhrOpen) XMLHttpRequest.prototype.open = originalXhrOpen;
-    if (originalWsSend) WebSocket.prototype.send = originalWsSend;
     originalFetch = null;
     originalXhrOpen = null;
-    originalWsSend = null;
     installed = false;
 }
 

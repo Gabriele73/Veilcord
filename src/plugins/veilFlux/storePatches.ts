@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import { findByProps } from "@webpack";
 import {
     ChannelStore,
     GuildChannelStore,
@@ -774,6 +775,34 @@ export function installStorePatches(): void {
         traceVeilStore("GuildMemberStore", GuildMemberStore);
         traceVeilStore("GuildChannelStore", GuildChannelStore);
         traceVeilStore("GuildStore", GuildStore);
+    }
+
+    // ---- Guild subscription sender ----
+    // Discord sends OP 14 (GUILD_SUBSCRIPTION_UPDATE) when it lazy-loads a
+    // guild after navigation. The gateway has no record of our synthetic
+    // guild ids and responds with 4000 Unknown Error, crashing the connection.
+    // We patch the function that sends this message (before ETF encoding)
+    // so Veil guild ids are silently skipped. Property names vary by Discord
+    // build; we try each known name in order and patch the first one found.
+    {
+        const subscriptionPropNames = [
+            "subscribeGuild",
+            "updateGuildSubscriptions",
+            "sendGuildSubscriptions",
+            "lazyLoadGuild",
+        ];
+        for (const propName of subscriptionPropNames) {
+            try {
+                const mod = findByProps(propName);
+                if (mod && typeof mod[propName] === "function") {
+                    patch(mod, propName, (orig, guildId: any, ...rest: any[]) => {
+                        if (typeof guildId === "string" && isVeilGuildId(guildId)) return;
+                        return orig(guildId, ...rest);
+                    });
+                    break;
+                }
+            } catch { /* try next name */ }
+        }
     }
 }
 

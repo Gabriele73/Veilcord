@@ -12,6 +12,7 @@ import { getServerDetail, VeilChannelRecord, VeilServerSummary } from "./api/ser
 import { buildChannelPayload } from "./records/buildGuildPayload";
 import { clearSeenAuthors, ensureAuthorInjected } from "./messages/buildMessagePayload";
 import {
+    getVeilGuildData,
     registerVeilGuild,
     setVeilGuildChannels,
     setVeilGuildMembers,
@@ -30,6 +31,19 @@ const createChannelRecordFromServer: any = findByCodeLazy(".GUILD_TEXT]", "fromS
 const installedGuildIds = new Set<string>();
 const installedChannelsByGuild = new Map<string, Set<string>>();
 const detailLoadInFlight = new Map<string, Promise<void>>();
+
+function onConnectionOpen() {
+    for (const guildId of Array.from(installedGuildIds)) {
+        const data = getVeilGuildData(guildId);
+        if (!data) continue;
+        for (const record of data.channelRecords.values()) {
+            try {
+                FluxDispatcher.dispatch({ type: "CHANNEL_CREATE", channel: record });
+            } catch { /* ignore */ }
+        }
+    }
+}
+FluxDispatcher.subscribe("CONNECTION_OPEN", onConnectionOpen);
 
 function dispatchChannelCreate(rawChannel: any): any {
     const record = createChannelRecordFromServer(rawChannel);
@@ -177,6 +191,7 @@ export async function ensureGuildDetail(serverId: number, syntheticGuildId: stri
  * the plugin lifecycle.
  */
 export function uninstallAll(): void {
+    FluxDispatcher.unsubscribe("CONNECTION_OPEN", onConnectionOpen);
     detachAllSockets();
     for (const id of Array.from(installedGuildIds)) {
         unregisterVeilGuild(id);
