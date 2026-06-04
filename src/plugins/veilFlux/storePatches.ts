@@ -232,6 +232,27 @@ function buildVeilGuildMemberRecord(syntheticGuildId: string, member: VeilMember
     };
 }
 
+// Self-member record built from the real Discord user id. getSelfMember must
+// return the current user's own Discord id as userId — Discord's permission
+// and navigation paths call getMember(guildId, currentUser.id) with the real
+// Discord snowflake, which never matches veilPubkeyToSyntheticUid() outputs.
+function buildSelfMemberRecord(syntheticGuildId: string, userId: string): any {
+    return {
+        userId,
+        guildId: syntheticGuildId,
+        nick: null,
+        roles: [],
+        joinedAt: new Date().toISOString(),
+        deaf: false,
+        mute: false,
+        pending: false,
+        flags: 0,
+        avatar: null,
+        premiumSince: null,
+        communicationDisabledUntil: null
+    };
+}
+
 /**
  * Verbose per-call tracing of every veil-id store read. OFF by default:
  * zero console spam and zero per-call overhead in normal use. Flip to true
@@ -380,6 +401,11 @@ export function installStorePatches(): void {
     // ---- GuildMemberStore ----
     patch(GuildMemberStore as any, "getMember", (orig, guildId: string, userId: string) => {
         if (isVeilGuildId(guildId)) {
+            // Discord calls getMember(guildId, currentUser.id) with the real
+            // Discord snowflake for permission and nav checks. That id never
+            // matches veilPubkeyToSyntheticUid outputs, so handle it first.
+            const self = UserStore.getCurrentUser?.();
+            if (self && userId === self.id) return buildSelfMemberRecord(guildId, self.id);
             const member = findVeilMemberByUserId(guildId, userId);
             return member ? buildVeilGuildMemberRecord(guildId, member) : null;
         }
@@ -390,8 +416,9 @@ export function installStorePatches(): void {
         if (isVeilGuildId(guildId)) {
             const self = UserStore.getCurrentUser?.();
             if (!self) return null;
-            const member = findVeilMemberByUserId(guildId, self.id);
-            return member ? buildVeilGuildMemberRecord(guildId, member) : null;
+            // Must use the real Discord user id: Discord's nav and permission
+            // paths verify getSelfMember().userId === currentUser.id.
+            return buildSelfMemberRecord(guildId, self.id);
         }
         return orig(guildId);
     });
@@ -407,6 +434,9 @@ export function installStorePatches(): void {
 
     patch(GuildMemberStore as any, "isMember", (orig, guildId: string, userId: string) => {
         if (isVeilGuildId(guildId)) {
+            // Real Discord user id always counts as a member of their own Veil guild.
+            const self = UserStore.getCurrentUser?.();
+            if (self && userId === self.id) return true;
             return findVeilMemberByUserId(guildId, userId) != null;
         }
         return orig(guildId, userId);
@@ -422,6 +452,12 @@ export function installStorePatches(): void {
     });
 
     patch(GuildMemberStore as any, "memberOf", (orig, userId: string) => {
+        // Real Discord user id: return every installed Veil guild.
+        const self = UserStore.getCurrentUser?.();
+        if (self && userId === self.id) {
+            const ids = Array.from(guildDataMap.keys());
+            if (ids.length) return ids;
+        }
         const veilGuildIds = Array.from(guildDataMap.entries())
             .filter(([, data]) => data.members.some(member => veilPubkeyToSyntheticUid(member.pubkey) === userId))
             .map(([guildId]) => guildId);

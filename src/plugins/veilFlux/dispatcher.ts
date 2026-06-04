@@ -10,6 +10,7 @@ import { FluxDispatcher } from "@webpack/common";
 import { listServerMembers } from "./api/members";
 import { getServerDetail, VeilChannelRecord, VeilServerSummary } from "./api/servers";
 import { buildChannelPayload } from "./records/buildGuildPayload";
+import { ensureAuthorInjected } from "./messages/buildMessagePayload";
 import {
     registerVeilGuild,
     setVeilGuildChannels,
@@ -143,6 +144,19 @@ export async function ensureGuildDetail(serverId: number, syntheticGuildId: stri
             try {
                 const members = await listServerMembers(serverId);
                 setVeilGuildMembers(syntheticGuildId, members);
+                // Inject user records into UserStore so the member list panel
+                // can render. Without this, getMemberIds returns Veil synthetic
+                // user ids but UserStore.getUser() returns null for each one,
+                // causing Discord to fire gateway GUILD_MEMBERS_REQUEST for a
+                // synthetic guild that doesn't exist on Discord's servers.
+                for (const m of members) {
+                    ensureAuthorInjected({
+                        pubkey: m.pubkey,
+                        username: m.serverNickname || m.username,
+                        avatar: m.avatar,
+                        badges: m.badges
+                    });
+                }
             } catch (err) {
                 console.warn("[VeilFlux] failed to load members for guild", syntheticGuildId, err);
             }
