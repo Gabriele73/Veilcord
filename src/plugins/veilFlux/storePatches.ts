@@ -364,6 +364,7 @@ export function installStorePatches(): void {
                 SELECTABLE: text,
                 VOCAL: [],
                 DIRECTORY: [],
+                CATEGORY: [],
                 [0]: text,
                 [2]: [],
                 [4]: [],

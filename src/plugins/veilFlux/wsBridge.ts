@@ -67,7 +67,7 @@ async function getSelfPubkey(): Promise<string | null> {
     return cachedSelfPubkey;
 }
 
-function clearSelfPubkeyCache() {
+export function clearSelfPubkeyCache() {
     cachedSelfPubkey = null;
 }
 

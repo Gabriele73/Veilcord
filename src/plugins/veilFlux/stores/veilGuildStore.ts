@@ -9,7 +9,7 @@ import { cryptoService } from "@plugins/veilCrypto";
 import { listMyServers, VeilServerSummary } from "../api/servers";
 import { reconcileGuilds, uninstallAll } from "../dispatcher";
 import { registerEntity } from "../idMap";
-import { reconcileBridge } from "../wsBridge";
+import { clearSelfPubkeyCache, reconcileBridge } from "../wsBridge";
 
 /**
  * Lightweight reactive store of "my Veil servers". Not a Flux store yet —
@@ -64,6 +64,12 @@ export function selectServer(syntheticId: string | null) {
 }
 
 export async function refreshMyServers(): Promise<void> {
+    // Clear stale self-pubkey cache so WS message dedup uses the active key.
+    // Must run on every refresh — key rotation fires veilcrypto:state-change
+    // which calls refreshMyServers(), and the old pubkey would otherwise
+    // survive until plugin stop.
+    clearSelfPubkeyCache();
+
     if (!(await cryptoService.hasStoredKey())) {
         setState({ loading: false, error: null, servers: [], bySyntheticId: new Map() });
         // No active key → nothing to mirror into Flux. Drop any guilds we

@@ -10,7 +10,7 @@ import { FluxDispatcher } from "@webpack/common";
 import { listServerMembers } from "./api/members";
 import { getServerDetail, VeilChannelRecord, VeilServerSummary } from "./api/servers";
 import { buildChannelPayload } from "./records/buildGuildPayload";
-import { ensureAuthorInjected } from "./messages/buildMessagePayload";
+import { clearSeenAuthors, ensureAuthorInjected } from "./messages/buildMessagePayload";
 import {
     registerVeilGuild,
     setVeilGuildChannels,
@@ -184,6 +184,9 @@ export function uninstallAll(): void {
     installedGuildIds.clear();
     installedChannelsByGuild.clear();
     detailLoadInFlight.clear();
+    // Reset author injection cache so plugin restart re-injects fresh user
+    // records instead of skipping members whose pubkeys were seen last session.
+    clearSeenAuthors();
 }
 
 export function isVeilGuildInstalled(syntheticId: string): boolean {

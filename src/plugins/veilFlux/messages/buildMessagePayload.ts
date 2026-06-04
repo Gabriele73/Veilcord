@@ -39,6 +39,11 @@ const VEIL_USER_DECIMAL_DIGITS = 14;
 
 const seenSyntheticAuthors = new Set<string>();
 
+/** Call on plugin stop so user records are re-injected fresh on next start. */
+export function clearSeenAuthors(): void {
+    seenSyntheticAuthors.clear();
+}
+
 export function veilPubkeyToSyntheticUid(pubkey: string): string {
     const head = (pubkey || "").toLowerCase().replace(/[^0-9a-f]/g, "").slice(0, 14);
     if (head.length === 0) {
