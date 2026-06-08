@@ -25,7 +25,11 @@ waitFor(["dispatch", "subscribe"], m => {
     FluxDispatcher = m;
     // Importing this directly causes all webpack commons to be imported, which can easily cause circular dependencies.
     // For this reason, use a non import access here.
-    Vencord.Api.PluginManager.subscribeAllPluginsFluxEvents(m);
+    // Guard: waitFor may fire synchronously via webpack cache during renderer.js IIFE init,
+    // before the `var Vencord` assignment completes. Defer if not yet available.
+    const doPluginSub = () => Vencord.Api.PluginManager.subscribeAllPluginsFluxEvents(m);
+    if (typeof Vencord !== "undefined") doPluginSub();
+    else Promise.resolve().then(doPluginSub);
 
     const cb = () => {
         m.unsubscribe("CONNECTION_OPEN", cb);
